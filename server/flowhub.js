@@ -303,3 +303,4 @@ module.exports = {
   getAllStoresSales, getWeeklyTrend, getAllStoresWeeklyTrend, getDashboardData,
   weekRange, todayRange, ytdRange, toDateStr, STORE_CONFIG,
 };
+force=Mon Feb 23 09:01:01 PST 2026
