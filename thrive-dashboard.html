@@ -1,0 +1,1364 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>THRIVE — Executive Sales Intelligence</title>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Mono:wght@300;400;500&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #080b0f;
+    --surface: #0e1318;
+    --card: #111820;
+    --border: #1e2d3d;
+    --accent: #00e5a0;
+    --accent2: #ff4d6d;
+    --accent3: #ffd166;
+    --text: #e8f4f0;
+    --muted: #5a7a6e;
+    --green: #00c97a;
+    --red: #ff3d5a;
+    --yellow: #ffd166;
+    --font-display: 'Bebas Neue', sans-serif;
+    --font-ui: 'Syne', sans-serif;
+    --font-mono: 'DM Mono', monospace;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-ui);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* NOISE TEXTURE */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E");
+    pointer-events: none;
+    z-index: 0;
+    opacity: 0.5;
+  }
+
+  .wrapper { position: relative; z-index: 1; padding: 32px; max-width: 1600px; margin: 0 auto; }
+
+  /* HEADER */
+  header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 48px;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 24px;
+  }
+
+  .logo-block h1 {
+    font-family: var(--font-display);
+    font-size: clamp(48px, 6vw, 80px);
+    letter-spacing: 8px;
+    color: var(--accent);
+    line-height: 1;
+    text-shadow: 0 0 40px rgba(0, 229, 160, 0.3);
+  }
+
+  .logo-block p {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 4px;
+    color: var(--muted);
+    text-transform: uppercase;
+    margin-top: 4px;
+  }
+
+  .header-meta {
+    text-align: right;
+    font-family: var(--font-mono);
+  }
+
+  .header-meta .date {
+    font-size: 13px;
+    color: var(--accent);
+    letter-spacing: 2px;
+  }
+
+  .header-meta .year-tabs {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+    justify-content: flex-end;
+  }
+
+  .year-tab {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    padding: 4px 10px;
+    cursor: pointer;
+    letter-spacing: 1px;
+    transition: all 0.2s;
+  }
+
+  .year-tab.active, .year-tab:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: rgba(0, 229, 160, 0.08);
+  }
+
+  /* KPI STRIP */
+  .kpi-strip {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 1px;
+    background: var(--border);
+    border: 1px solid var(--border);
+    margin-bottom: 32px;
+    animation: fadeUp 0.6s ease both;
+  }
+
+  .kpi-card {
+    background: var(--card);
+    padding: 24px 20px;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .kpi-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, var(--accent), transparent);
+    opacity: 0;
+    transition: opacity 0.3s;
+  }
+
+  .kpi-card:hover::before { opacity: 1; }
+
+  .kpi-label {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 3px;
+    color: var(--muted);
+    text-transform: uppercase;
+    margin-bottom: 8px;
+  }
+
+  .kpi-value {
+    font-family: var(--font-display);
+    font-size: 38px;
+    letter-spacing: 2px;
+    line-height: 1;
+    color: var(--text);
+  }
+
+  .kpi-value.green { color: var(--green); }
+  .kpi-value.red { color: var(--red); }
+
+  .kpi-sub {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: 6px;
+  }
+
+  .kpi-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 2px;
+    margin-top: 8px;
+  }
+
+  .kpi-badge.up { background: rgba(0, 201, 122, 0.1); color: var(--green); }
+  .kpi-badge.down { background: rgba(255, 61, 90, 0.1); color: var(--red); }
+
+  /* SECTION HEADER */
+  .section-header {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 20px;
+    margin-top: 40px;
+  }
+
+  .section-title {
+    font-family: var(--font-display);
+    font-size: 28px;
+    letter-spacing: 4px;
+    color: var(--text);
+  }
+
+  .section-line {
+    flex: 1;
+    height: 1px;
+    background: linear-gradient(90deg, var(--border), transparent);
+  }
+
+  .section-badge {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 2px;
+    color: var(--accent);
+    border: 1px solid rgba(0, 229, 160, 0.3);
+    padding: 3px 10px;
+  }
+
+  /* HEATMAP TABLE */
+  .heatmap-container {
+    overflow-x: auto;
+    background: var(--card);
+    border: 1px solid var(--border);
+    animation: fadeUp 0.6s ease 0.2s both;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: var(--font-mono);
+    font-size: 12px;
+  }
+
+  thead tr {
+    background: var(--surface);
+    border-bottom: 2px solid var(--accent);
+  }
+
+  thead th {
+    padding: 14px 12px;
+    text-align: right;
+    font-size: 10px;
+    letter-spacing: 2px;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+
+  thead th:first-child { text-align: left; }
+  thead th.store-header { color: var(--accent); }
+
+  tbody tr {
+    border-bottom: 1px solid rgba(30, 45, 61, 0.5);
+    transition: background 0.15s;
+  }
+
+  tbody tr:hover { background: rgba(0, 229, 160, 0.03); }
+
+  tbody td {
+    padding: 11px 12px;
+    text-align: right;
+    white-space: nowrap;
+  }
+
+  tbody td:first-child {
+    text-align: left;
+    color: var(--muted);
+    font-size: 11px;
+    letter-spacing: 1px;
+  }
+
+  .cell-value {
+    display: inline-block;
+    padding: 3px 8px;
+    border-radius: 2px;
+    min-width: 78px;
+    text-align: right;
+    font-weight: 500;
+    position: relative;
+    transition: all 0.2s;
+  }
+
+  .cell-value.up-strong { background: rgba(0, 201, 122, 0.25); color: #00ff9d; }
+  .cell-value.up-mild   { background: rgba(0, 201, 122, 0.12); color: #5eddaa; }
+  .cell-value.neutral   { background: rgba(255, 209, 102, 0.08); color: #ffd166; }
+  .cell-value.down-mild { background: rgba(255, 61, 90, 0.12); color: #ff7a92; }
+  .cell-value.down-strong { background: rgba(255, 61, 90, 0.28); color: #ff3d5a; }
+  .cell-value.no-data   { color: var(--muted); font-size: 10px; letter-spacing: 2px; }
+  .cell-value.highlight { outline: 1px solid var(--accent); }
+
+  .company-avg {
+    font-weight: 700;
+    color: var(--accent) !important;
+    font-size: 13px !important;
+  }
+
+  /* STORE CARDS GRID */
+  .store-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+    gap: 20px;
+    animation: fadeUp 0.6s ease 0.4s both;
+  }
+
+  .store-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    padding: 24px;
+    position: relative;
+    overflow: hidden;
+    cursor: pointer;
+    transition: border-color 0.2s, transform 0.2s;
+  }
+
+  .store-card:hover {
+    border-color: rgba(0, 229, 160, 0.4);
+    transform: translateY(-2px);
+  }
+
+  .store-card-accent {
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 3px;
+  }
+
+  .store-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 20px;
+  }
+
+  .store-name {
+    font-family: var(--font-display);
+    font-size: 26px;
+    letter-spacing: 3px;
+  }
+
+  .store-rank {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 2px;
+  }
+
+  .store-metrics {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin-bottom: 20px;
+  }
+
+  .store-metric {
+    background: var(--surface);
+    padding: 12px;
+    border: 1px solid var(--border);
+  }
+
+  .store-metric-label {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    letter-spacing: 2px;
+    color: var(--muted);
+    text-transform: uppercase;
+    margin-bottom: 4px;
+  }
+
+  .store-metric-value {
+    font-family: var(--font-display);
+    font-size: 22px;
+    letter-spacing: 1px;
+  }
+
+  /* SPARKLINE */
+  .sparkline-wrapper {
+    height: 60px;
+    position: relative;
+  }
+
+  .sparkline-wrapper canvas {
+    width: 100%;
+    height: 100%;
+  }
+
+  .spark-label {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    letter-spacing: 2px;
+    color: var(--muted);
+    margin-bottom: 6px;
+    text-transform: uppercase;
+  }
+
+  /* TREND BAR CHART */
+  .trend-chart {
+    background: var(--card);
+    border: 1px solid var(--border);
+    padding: 28px;
+    margin-bottom: 20px;
+    animation: fadeUp 0.6s ease 0.3s both;
+  }
+
+  .bar-chart-container {
+    display: flex;
+    align-items: flex-end;
+    gap: 4px;
+    height: 120px;
+    margin-top: 20px;
+  }
+
+  .bar-group {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    flex: 1;
+    gap: 4px;
+    height: 100%;
+    justify-content: flex-end;
+  }
+
+  .bar {
+    width: 100%;
+    border-radius: 1px 1px 0 0;
+    min-height: 2px;
+    position: relative;
+    transition: opacity 0.2s;
+  }
+
+  .bar:hover { opacity: 0.85; }
+
+  .bar-label {
+    font-family: var(--font-mono);
+    font-size: 8px;
+    color: var(--muted);
+    letter-spacing: 1px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+    text-align: center;
+  }
+
+  /* LEADERBOARD */
+  .leaderboard {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+    animation: fadeUp 0.6s ease 0.5s both;
+  }
+
+  .lb-panel {
+    background: var(--card);
+    border: 1px solid var(--border);
+    padding: 24px;
+  }
+
+  .lb-title {
+    font-family: var(--font-display);
+    font-size: 18px;
+    letter-spacing: 3px;
+    color: var(--muted);
+    margin-bottom: 16px;
+  }
+
+  .lb-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 0;
+    border-bottom: 1px solid rgba(30, 45, 61, 0.5);
+  }
+
+  .lb-row:last-child { border-bottom: none; }
+
+  .lb-rank {
+    font-family: var(--font-display);
+    font-size: 20px;
+    color: var(--muted);
+    width: 28px;
+  }
+
+  .lb-rank.gold { color: #ffd700; }
+  .lb-rank.silver { color: #c0c0c0; }
+  .lb-rank.bronze { color: #cd7f32; }
+
+  .lb-store {
+    flex: 1;
+    font-family: var(--font-ui);
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 1px;
+  }
+
+  .lb-val {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    text-align: right;
+  }
+
+  .lb-bar-bg {
+    flex: 1;
+    height: 3px;
+    background: var(--border);
+    position: relative;
+  }
+
+  .lb-bar-fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 2px;
+  }
+
+  /* WEEK DELTA TABLE */
+  .delta-grid {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 8px;
+    margin-top: 16px;
+  }
+
+  .delta-cell {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    padding: 10px 8px;
+    text-align: center;
+  }
+
+  .delta-cell .dc-store {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    letter-spacing: 2px;
+    color: var(--muted);
+    margin-bottom: 4px;
+  }
+
+  .delta-cell .dc-val {
+    font-family: var(--font-display);
+    font-size: 18px;
+    letter-spacing: 1px;
+  }
+
+  .delta-cell.pos { border-color: rgba(0, 201, 122, 0.4); }
+  .delta-cell.neg { border-color: rgba(255, 61, 90, 0.4); }
+
+  /* FOOTER */
+  footer {
+    margin-top: 60px;
+    padding-top: 24px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  footer .f-brand {
+    font-family: var(--font-display);
+    font-size: 20px;
+    letter-spacing: 4px;
+    color: var(--muted);
+  }
+
+  footer .f-meta {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--muted);
+    letter-spacing: 2px;
+  }
+
+  /* VIEW TOGGLE */
+  .view-controls {
+    display: flex;
+    gap: 0;
+    border: 1px solid var(--border);
+    margin-bottom: 28px;
+    width: fit-content;
+  }
+
+  .view-btn {
+    background: none;
+    border: none;
+    border-right: 1px solid var(--border);
+    color: var(--muted);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 2px;
+    padding: 10px 20px;
+    cursor: pointer;
+    transition: all 0.2s;
+    text-transform: uppercase;
+  }
+
+  .view-btn:last-child { border-right: none; }
+  .view-btn.active, .view-btn:hover {
+    background: rgba(0, 229, 160, 0.08);
+    color: var(--accent);
+  }
+
+  /* SECTION HIDE */
+  .section { display: block; }
+  .section.hidden { display: none; }
+
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(20px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  /* TOOLTIP */
+  .tooltip {
+    position: absolute;
+    background: #0e1318;
+    border: 1px solid var(--accent);
+    padding: 8px 12px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    pointer-events: none;
+    z-index: 100;
+    display: none;
+    white-space: nowrap;
+  }
+
+  /* PILL */
+  .pill {
+    display: inline-block;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 2px;
+    padding: 3px 10px;
+    border-radius: 2px;
+    text-transform: uppercase;
+  }
+
+  .pill.live { background: rgba(0, 229, 160, 0.15); color: var(--accent); animation: pulse 2s infinite; }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+  }
+
+  /* SCROLLBAR */
+  ::-webkit-scrollbar { width: 4px; height: 4px; }
+  ::-webkit-scrollbar-track { background: var(--surface); }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+
+  .store-select {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    padding: 8px 12px;
+    letter-spacing: 1px;
+    cursor: pointer;
+    margin-bottom: 20px;
+  }
+
+  /* VARIANCE INDICATOR */
+  .var-block {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+  }
+
+  .var-arrow { font-size: 16px; }
+  .var-pct { font-family: var(--font-mono); font-size: 13px; }
+</style>
+</head>
+<body>
+
+<div class="wrapper">
+
+  <!-- HEADER -->
+  <header>
+    <div class="logo-block">
+      <h1>THRIVE</h1>
+      <p>Cannabis Marketplace — Executive Intelligence Dashboard</p>
+    </div>
+    <div class="header-meta">
+      <div class="date" id="currentDate"></div>
+      <div style="margin-top:6px;"><span class="pill live">● LIVE DATA</span></div>
+      <div class="year-tabs">
+        <button class="year-tab active">2025</button>
+        <button class="year-tab">2024</button>
+        <button class="year-tab">2023</button>
+        <button class="year-tab">2022</button>
+      </div>
+    </div>
+  </header>
+
+  <!-- VIEW CONTROLS -->
+  <div class="view-controls">
+    <button class="view-btn active" onclick="setView('executive')">Executive</button>
+    <button class="view-btn" onclick="setView('heatmap')">Weekly Heatmap</button>
+    <button class="view-btn" onclick="setView('stores')">Store Detail</button>
+    <button class="view-btn" onclick="setView('velocity')">Velocity</button>
+  </div>
+
+  <!-- EXECUTIVE VIEW -->
+  <div id="view-executive" class="section">
+
+    <!-- KPI STRIP -->
+    <div class="kpi-strip" id="kpiStrip"></div>
+
+    <!-- COMPANY TREND BAR CHART -->
+    <div class="section-header">
+      <span class="section-title">WEEKLY REVENUE</span>
+      <div class="section-line"></div>
+      <span class="section-badge">ALL 7 STORES</span>
+    </div>
+    <div class="trend-chart">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <div>
+          <div class="kpi-label">COMPANY AGGREGATE — 2025 YTD</div>
+          <div style="font-family:var(--font-display);font-size:18px;letter-spacing:2px;color:var(--muted);">Weekly Net Sales Performance</div>
+        </div>
+        <div id="chartToggle" style="display:flex;gap:0;border:1px solid var(--border);">
+          <button class="view-btn active" onclick="setChartMode('company')">COMPANY</button>
+          <button class="view-btn" onclick="setChartMode('stores')">BY STORE</button>
+        </div>
+      </div>
+      <div class="bar-chart-container" id="mainChart"></div>
+    </div>
+
+    <!-- LAST WEEK DELTA -->
+    <div class="section-header">
+      <span class="section-title">LATEST WEEK WoW</span>
+      <div class="section-line"></div>
+      <span class="section-badge" id="latestWeekLabel"></span>
+    </div>
+    <div class="delta-grid" id="deltaGrid"></div>
+
+    <!-- LEADERBOARD -->
+    <div class="section-header" style="margin-top:40px;">
+      <span class="section-title">STORE RANKINGS</span>
+      <div class="section-line"></div>
+      <span class="section-badge">YTD AVG</span>
+    </div>
+    <div class="leaderboard" id="leaderboard"></div>
+
+  </div>
+
+  <!-- HEATMAP VIEW -->
+  <div id="view-heatmap" class="section hidden">
+    <div class="section-header">
+      <span class="section-title">WEEK-OVER-WEEK HEATMAP</span>
+      <div class="section-line"></div>
+      <span class="section-badge">ALL STORES — 2025</span>
+    </div>
+    <div class="heatmap-container">
+      <table id="heatmapTable"></table>
+    </div>
+  </div>
+
+  <!-- STORE DETAIL VIEW -->
+  <div id="view-stores" class="section hidden">
+    <select class="store-select" id="storeSelect" onchange="renderStoreDetail()">
+    </select>
+    <div id="storeDetailContent"></div>
+  </div>
+
+  <!-- VELOCITY VIEW -->
+  <div id="view-velocity" class="section hidden">
+    <div class="section-header">
+      <span class="section-title">PERFORMANCE VELOCITY</span>
+      <div class="section-line"></div>
+      <span class="section-badge">4-WEEK ROLLING</span>
+    </div>
+    <div id="velocityContent"></div>
+  </div>
+
+</div>
+
+<footer>
+  <div class="f-brand">THRIVE CANNABIS</div>
+  <div class="f-meta">EXECUTIVE INTELLIGENCE PLATFORM • CONFIDENTIAL</div>
+</footer>
+
+<div class="tooltip" id="tooltip"></div>
+
+<script>
+// ============================================================
+// DATA — parsed from the 2025 spreadsheet
+// ============================================================
+const STORES = ['Cactus', 'Cheyenne', 'Jackpot', 'Main', 'Reno', 'Sahara', 'Sammy'];
+
+const STORE_COLORS = {
+  'Cactus':   '#00e5a0',
+  'Cheyenne': '#4db8ff',
+  'Jackpot':  '#c084fc',
+  'Main':     '#ffd166',
+  'Reno':     '#ff8c42',
+  'Sahara':   '#ff4d6d',
+  'Sammy':    '#a8e6cf',
+};
+
+const RAW_DATA = [
+  { week: '12/30-01/05', Cactus:200238.31, Cheyenne:194955.00, Jackpot:213927.96, Main:null, Reno:105997.11, Sahara:110161.81, Sammy:81289.94, avg:908570.13 },
+  { week: '01/06-01/12', Cactus:173840.08, Cheyenne:167914.22, Jackpot:190566.88, Main:null, Reno:105338.57, Sahara:89480.88, Sammy:73332.10, avg:801074.73 },
+  { week: '01/13-01/19', Cactus:193702.13, Cheyenne:178573.75, Jackpot:205603.15, Main:null, Reno:103768.58, Sahara:98959.24, Sammy:72019.52, avg:852626.37 },
+  { week: '01/20-01/26', Cactus:187418.85, Cheyenne:177653.16, Jackpot:197078.25, Main:null, Reno:105021.29, Sahara:94940.11, Sammy:80734.39, avg:842846.05 },
+  { week: '01/27-02/02', Cactus:181340.65, Cheyenne:177247.41, Jackpot:211105.03, Main:null, Reno:107824.36, Sahara:99365.84, Sammy:67461.40, avg:844344.69 },
+  { week: '02/03-02/09', Cactus:193536.63, Cheyenne:179469.24, Jackpot:215948.52, Main:null, Reno:101215.66, Sahara:102068.09, Sammy:72796.66, avg:865055.00 },
+  { week: '02/10-02/16', Cactus:190301.49, Cheyenne:173892.88, Jackpot:185736.39, Main:null, Reno:103967.36, Sahara:103095.72, Sammy:83075.91, avg:840071.75 },
+  { week: '02/17-02/23', Cactus:189842.69, Cheyenne:183774.52, Jackpot:224367.21, Main:null, Reno:108466.28, Sahara:103495.19, Sammy:74979.42, avg:884725.31 },
+  { week: '02/24-03/02', Cactus:190415.14, Cheyenne:190361.17, Jackpot:242324.78, Main:null, Reno:102148.98, Sahara:108328.91, Sammy:86294.95, avg:920873.91 },
+  { week: '03/03-03/09', Cactus:190276.45, Cheyenne:177773.31, Jackpot:212263.84, Main:null, Reno:96358.32, Sahara:100221.32, Sammy:74980.20, avg:851873.44 },
+  { week: '03/10-03/16', Cactus:194364.13, Cheyenne:178875.21, Jackpot:207746.70, Main:7422.55, Reno:104025.25, Sahara:106186.09, Sammy:74300.03, avg:872951.96 },
+  { week: '03/17-03/23', Cactus:194671.26, Cheyenne:170941.22, Jackpot:203764.37, Main:17367.75, Reno:104933.32, Sahara:101825.19, Sammy:93432.26, avg:886995.37 },
+  { week: '03/24-03/30', Cactus:188279.31, Cheyenne:174022.95, Jackpot:205749.66, Main:18176.87, Reno:96218.52, Sahara:101565.14, Sammy:80100.90, avg:862115.35 },
+  { week: '03/31-04/06', Cactus:188226.97, Cheyenne:172482.24, Jackpot:209841.78, Main:15566.66, Reno:100483.90, Sahara:101552.94, Sammy:77340.66, avg:865595.15 },
+  { week: '04/07-04/13', Cactus:182369.09, Cheyenne:171398.02, Jackpot:216242.34, Main:15292.36, Reno:105568.09, Sahara:102218.97, Sammy:76558.48, avg:865635.35 },
+  { week: '04/14-04/20', Cactus:292914.84, Cheyenne:274975.85, Jackpot:262160.01, Main:26893.42, Reno:153062.04, Sahara:171854.93, Sammy:111753.47, avg:1293714.56 },
+  { week: '04/21-04/27', Cactus:152546.22, Cheyenne:133737.73, Jackpot:188375.31, Main:15539.41, Reno:81085.41, Sahara:85806.02, Sammy:58289.28, avg:739178.38 },
+  { week: '04/28-05/04', Cactus:171804.30, Cheyenne:162098.65, Jackpot:200742.48, Main:15365.81, Reno:95726.23, Sahara:99164.47, Sammy:68673.78, avg:813575.72 },
+  { week: '05/05-05/11', Cactus:171701.81, Cheyenne:159727.12, Jackpot:189459.58, Main:14766.45, Reno:97553.89, Sahara:95230.31, Sammy:71100.76, avg:799539.92 },
+  { week: '05/12-05/18', Cactus:185982.53, Cheyenne:170837.53, Jackpot:198891.60, Main:13177.90, Reno:102207.64, Sahara:113006.56, Sammy:96121.16, avg:884224.92 },
+  { week: '05/19-05/25', Cactus:180499.96, Cheyenne:168584.80, Jackpot:213879.46, Main:14099.85, Reno:103808.72, Sahara:105698.81, Sammy:71612.73, avg:858184.33 },
+  { week: '05/26-06/01', Cactus:181759.16, Cheyenne:170164.33, Jackpot:212097.80, Main:15548.82, Reno:101625.19, Sahara:103313.76, Sammy:69958.26, avg:854467.32 },
+  { week: '06/02-06/08', Cactus:179981.93, Cheyenne:173197.82, Jackpot:216139.11, Main:16016.62, Reno:103823.43, Sahara:104868.75, Sammy:67684.43, avg:861712.09 },
+  { week: '06/09-06/15', Cactus:173188.68, Cheyenne:160066.60, Jackpot:217660.55, Main:10496.44, Reno:97599.81, Sahara:94790.69, Sammy:64206.48, avg:818009.25 },
+  { week: '06/16-06/22', Cactus:174875.55, Cheyenne:160534.19, Jackpot:221976.71, Main:13231.33, Reno:100011.89, Sahara:96737.07, Sammy:79039.86, avg:846406.62 },
+  { week: '06/23-06/29', Cactus:173672.39, Cheyenne:158071.32, Jackpot:203700.52, Main:14365.22, Reno:104386.61, Sahara:97417.66, Sammy:69780.19, avg:821414.11 },
+  { week: '07/07-07/13', Cactus:168708.78, Cheyenne:154006.76, Jackpot:217358.48, Main:13094.48, Reno:100174.92, Sahara:98706.23, Sammy:67982.60, avg:820033.25 },
+  { week: '07/14-07/20', Cactus:170509.75, Cheyenne:156249.29, Jackpot:213884.59, Main:13737.24, Reno:102556.31, Sahara:98271.21, Sammy:75370.04, avg:830578.43 },
+  { week: '07/21-07/27', Cactus:172015.78, Cheyenne:149398.53, Jackpot:215329.12, Main:14238.53, Reno:102129.44, Sahara:96241.78, Sammy:83854.22, avg:835207.40 },
+  { week: '08/04-08/10', Cactus:168379.88, Cheyenne:148172.70, Jackpot:205924.84, Main:13046.03, Reno:99527.61, Sahara:94672.22, Sammy:71494.27, avg:801217.55 },
+  { week: '08/11-08/17', Cactus:168882.88, Cheyenne:148867.26, Jackpot:218496.26, Main:14497.34, Reno:103059.38, Sahara:89604.63, Sammy:66787.51, avg:810205.26 },
+  { week: '08/18-08/24', Cactus:156252.17, Cheyenne:143595.99, Jackpot:227855.57, Main:15183.81, Reno:122223.87, Sahara:90952.17, Sammy:65895.73, avg:821959.31 },
+  { week: '08/25-08/31', Cactus:160980.89, Cheyenne:150208.40, Jackpot:233944.00, Main:16502.47, Reno:103186.09, Sahara:96251.59, Sammy:69625.61, avg:830131.34 },
+  { week: '09/01-09/07', Cactus:156929.05, Cheyenne:141533.01, Jackpot:228041.84, Main:19336.68, Reno:98152.21, Sahara:89122.26, Sammy:64628.19, avg:797743.24 },
+  { week: '09/08-09/14', Cactus:166033.59, Cheyenne:140914.39, Jackpot:227952.72, Main:16160.54, Reno:95801.07, Sahara:92327.30, Sammy:72145.45, avg:810765.06 },
+  { week: '09/15-09/21', Cactus:173295.09, Cheyenne:145311.49, Jackpot:222179.26, Main:18637.26, Reno:100909.16, Sahara:94605.53, Sammy:77692.49, avg:832630.28 },
+  { week: '09/22-09/28', Cactus:168375.50, Cheyenne:146123.46, Jackpot:232233.63, Main:17862.62, Reno:98795.81, Sahara:92424.25, Sammy:68340.60, avg:824166.07 },
+  { week: '09/29-10/05', Cactus:161802.43, Cheyenne:144588.37, Jackpot:237937.10, Main:21977.09, Reno:86058.09, Sahara:92097.66, Sammy:69590.60, avg:814051.34 },
+  { week: '10/06-10/12', Cactus:165361.57, Cheyenne:140848.70, Jackpot:220624.57, Main:18156.13, Reno:89395.59, Sahara:88969.66, Sammy:67213.98, avg:790560.22 },
+  { week: '10/13-10/19', Cactus:176160.20, Cheyenne:144627.85, Jackpot:219232.56, Main:24093.76, Reno:87538.95, Sahara:92138.76, Sammy:96357.09, avg:840149.19 },
+  { week: '10/20-10/26', Cactus:163707.88, Cheyenne:141567.78, Jackpot:217750.54, Main:20596.47, Reno:96466.02, Sahara:91730.21, Sammy:75140.82, avg:806861.72 },
+  { week: '10/27-11/02', Cactus:164185.35, Cheyenne:144919.72, Jackpot:220646.12, Main:20552.78, Reno:93101.91, Sahara:94496.28, Sammy:68876.39, avg:806782.55 },
+  { week: '11/03-11/09', Cactus:161670.20, Cheyenne:143683.94, Jackpot:240070.17, Main:22434.08, Reno:95386.16, Sahara:93494.78, Sammy:85244.26, avg:842963.47 },
+  { week: '11/10-11/16', Cactus:159207.94, Cheyenne:142633.94, Jackpot:227300.59, Main:20624.86, Reno:91512.45, Sahara:88145.45, Sammy:66213.69, avg:795638.92 },
+  { week: '11/17-11/23', Cactus:154486.71, Cheyenne:136007.87, Jackpot:230087.69, Main:14031.90, Reno:93168.49, Sahara:90086.03, Sammy:59736.19, avg:777606.68 },
+  { week: '11/24-11/30', Cactus:196357.47, Cheyenne:195621.31, Jackpot:258930.02, Main:18082.39, Reno:118819.24, Sahara:112003.27, Sammy:56260.36, avg:956074.06 },
+  { week: '12/01-12/07', Cactus:138704.38, Cheyenne:120332.68, Jackpot:195409.67, Main:17152.25, Reno:88513.15, Sahara:79247.70, Sammy:65478.08, avg:704837.91 },
+  { week: '12/08-12/14', Cactus:155140.72, Cheyenne:127938.67, Jackpot:222970.54, Main:16405.81, Reno:86920.22, Sahara:82370.47, Sammy:61964.58, avg:753711.01 },
+  { week: '12/15-12/21', Cactus:157083.13, Cheyenne:137075.67, Jackpot:215706.21, Main:15050.18, Reno:102655.46, Sahara:88071.44, Sammy:43736.42, avg:759380.51 },
+];
+
+// ============================================================
+// UTILITIES
+// ============================================================
+function fmt(n) {
+  if (n === null || n === undefined) return '—';
+  return '$' + Math.round(n).toLocaleString();
+}
+
+function fmtK(n) {
+  if (!n) return '—';
+  if (n >= 1000000) return '$' + (n/1000000).toFixed(2) + 'M';
+  return '$' + Math.round(n/1000).toLocaleString() + 'K';
+}
+
+function pct(a, b) {
+  if (!a || !b) return null;
+  return ((a - b) / b * 100);
+}
+
+function heatClass(p) {
+  if (p === null) return 'neutral';
+  if (p > 8)  return 'up-strong';
+  if (p > 2)  return 'up-mild';
+  if (p > -2) return 'neutral';
+  if (p > -8) return 'down-mild';
+  return 'down-strong';
+}
+
+function avgFor(store) {
+  const vals = RAW_DATA.map(r => r[store]).filter(v => v !== null && v !== undefined);
+  return vals.reduce((a,b)=>a+b,0) / vals.length;
+}
+
+function peakFor(store) {
+  return Math.max(...RAW_DATA.map(r => r[store]).filter(v=>v));
+}
+
+function minFor(store) {
+  return Math.min(...RAW_DATA.map(r => r[store]).filter(v=>v));
+}
+
+function ytdFor(store) {
+  return RAW_DATA.map(r=>r[store]).filter(v=>v).reduce((a,b)=>a+b,0);
+}
+
+function lastNWeeks(store, n) {
+  const vals = RAW_DATA.slice(-n).map(r => r[store]).filter(v=>v);
+  return vals;
+}
+
+function companyWeek(row) {
+  return STORES.map(s => row[s] || 0).reduce((a,b)=>a+b,0);
+}
+
+// ============================================================
+// DATE
+// ============================================================
+document.getElementById('currentDate').textContent =
+  new Date().toLocaleDateString('en-US',{weekday:'long',year:'numeric',month:'long',day:'numeric'}).toUpperCase();
+
+// ============================================================
+// KPI STRIP
+// ============================================================
+function renderKPIs() {
+  const latest = RAW_DATA[RAW_DATA.length - 1];
+  const prev   = RAW_DATA[RAW_DATA.length - 2];
+
+  const ytdTotal = RAW_DATA.map(r => companyWeek(r)).reduce((a,b)=>a+b,0);
+  const avgWeek  = ytdTotal / RAW_DATA.length;
+  const peakWeek = Math.max(...RAW_DATA.map(r => r.avg));
+  const latestW  = companyWeek(latest);
+  const prevW    = companyWeek(prev);
+  const wowPct   = pct(latestW, prevW);
+  const topStore = STORES.slice().sort((a,b) => ytdFor(b) - ytdFor(a))[0];
+
+  const kpis = [
+    { label:'YTD TOTAL REVENUE', value: fmtK(ytdTotal), sub: '2025 All Locations', badge: null },
+    { label:'LAST WEEK', value: fmtK(latestW), sub: latest.week, badge: { dir: wowPct >= 0 ? 'up':'down', val: (wowPct>=0?'+':'') + wowPct.toFixed(1)+'% WoW' } },
+    { label:'WEEKLY AVERAGE', value: fmtK(avgWeek), sub: 'All Stores Combined', badge: null },
+    { label:'PEAK WEEK', value: fmtK(peakWeek), sub: '04/14-04/20 (4/20 Week)', badge: { dir:'up', val:'Record High' } },
+    { label:'LEADING STORE', value: topStore.toUpperCase(), sub: fmtK(ytdFor(topStore)) + ' YTD', badge: null, mono: false },
+  ];
+
+  const strip = document.getElementById('kpiStrip');
+  strip.innerHTML = kpis.map(k => `
+    <div class="kpi-card">
+      <div class="kpi-label">${k.label}</div>
+      <div class="kpi-value ${k.mono===false?'':'green'}">${k.value}</div>
+      <div class="kpi-sub">${k.sub}</div>
+      ${k.badge ? `<div class="kpi-badge ${k.badge.dir}">${k.badge.dir==='up'?'▲':'▼'} ${k.badge.val}</div>` : ''}
+    </div>
+  `).join('');
+}
+
+// ============================================================
+// MAIN CHART
+// ============================================================
+let chartMode = 'company';
+
+function setChartMode(mode) {
+  chartMode = mode;
+  document.querySelectorAll('#chartToggle .view-btn').forEach((b,i) => {
+    b.classList.toggle('active', (i===0 && mode==='company') || (i===1 && mode==='stores'));
+  });
+  renderMainChart();
+}
+
+function renderMainChart() {
+  const container = document.getElementById('mainChart');
+  container.innerHTML = '';
+  const maxVal = Math.max(...RAW_DATA.map(r => chartMode==='company' ? r.avg : Math.max(...STORES.map(s=>r[s]||0))));
+  const recent = RAW_DATA.slice(-24); // last 24 weeks for readability
+
+  recent.forEach((row, i) => {
+    const group = document.createElement('div');
+    group.className = 'bar-group';
+
+    if (chartMode === 'company') {
+      const val = companyWeek(row);
+      const h = Math.round((val / maxVal) * 100);
+      const prevVal = i > 0 ? companyWeek(recent[i-1]) : val;
+      const color = val >= prevVal ? 'var(--accent)' : 'var(--red)';
+      group.innerHTML = `
+        <div class="bar" style="height:${h}%;background:${color};opacity:0.85;" title="${row.week}: ${fmtK(val)}"></div>
+        <div class="bar-label">${row.week.split('-')[0]}</div>
+      `;
+    } else {
+      const stackH = STORES.map(s => {
+        const v = row[s] || 0;
+        return { store: s, h: Math.round((v/maxVal)*100), color: STORE_COLORS[s] };
+      });
+      const barsHtml = stackH.reverse().map(s =>
+        `<div class="bar" style="height:${s.h}%;background:${s.color};opacity:0.75;" title="${s.store}: ${fmtK(row[s.store])}"></div>`
+      ).join('');
+      group.innerHTML = barsHtml + `<div class="bar-label">${row.week.split('-')[0]}</div>`;
+    }
+
+    container.appendChild(group);
+  });
+}
+
+// ============================================================
+// DELTA GRID (latest week WoW)
+// ============================================================
+function renderDeltaGrid() {
+  const latest = RAW_DATA[RAW_DATA.length - 1];
+  const prev   = RAW_DATA[RAW_DATA.length - 2];
+
+  document.getElementById('latestWeekLabel').textContent = latest.week;
+
+  const grid = document.getElementById('deltaGrid');
+  grid.innerHTML = STORES.map(s => {
+    const cur = latest[s], prv = prev[s];
+    const p = pct(cur, prv);
+    const isPos = p !== null && p >= 0;
+    const arrow = p === null ? '' : (isPos ? '▲' : '▼');
+    const color = isPos ? 'var(--green)' : 'var(--red)';
+    return `
+      <div class="delta-cell ${isPos ? 'pos' : 'neg'}">
+        <div class="dc-store">${s.toUpperCase()}</div>
+        <div class="dc-val" style="color:${color}">${arrow} ${p !== null ? Math.abs(p).toFixed(1)+'%' : '—'}</div>
+        <div style="font-family:var(--font-mono);font-size:10px;color:var(--muted);margin-top:4px;">${fmtK(cur)}</div>
+      </div>
+    `;
+  }).join('');
+}
+
+// ============================================================
+// LEADERBOARD
+// ============================================================
+function renderLeaderboard() {
+  const byYTD   = STORES.slice().sort((a,b)=>ytdFor(b)-ytdFor(a));
+  const byWoW   = STORES.slice().sort((a,b)=>{
+    const la = RAW_DATA[RAW_DATA.length-1], lb = RAW_DATA[RAW_DATA.length-2];
+    return pct(la[b],lb[b]) - pct(la[a],lb[a]);
+  });
+
+  const maxYTD = ytdFor(byYTD[0]);
+  const ranks = ['gold','silver','bronze','','','',''];
+
+  const lb = document.getElementById('leaderboard');
+  lb.innerHTML = `
+    <div class="lb-panel">
+      <div class="lb-title">YTD REVENUE LEADERS</div>
+      ${byYTD.map((s,i) => `
+        <div class="lb-row">
+          <div class="lb-rank ${ranks[i]||''}">${i+1}</div>
+          <div>
+            <div class="lb-store" style="color:${STORE_COLORS[s]}">${s}</div>
+            <div style="font-family:var(--font-mono);font-size:10px;color:var(--muted);">${fmtK(ytdFor(s))}</div>
+          </div>
+          <div style="flex:1;margin:0 12px;">
+            <div class="lb-bar-bg"><div class="lb-bar-fill" style="width:${(ytdFor(s)/maxYTD*100).toFixed(0)}%;background:${STORE_COLORS[s]};"></div></div>
+          </div>
+          <div class="lb-val" style="color:${STORE_COLORS[s]}">${fmtK(avgFor(s))}<div style="color:var(--muted);font-size:9px;letter-spacing:1px;">WK AVG</div></div>
+        </div>
+      `).join('')}
+    </div>
+    <div class="lb-panel">
+      <div class="lb-title">WoW MOMENTUM (LATEST WEEK)</div>
+      ${byWoW.map((s,i) => {
+        const cur = RAW_DATA[RAW_DATA.length-1][s];
+        const prv = RAW_DATA[RAW_DATA.length-2][s];
+        const p = pct(cur, prv);
+        const isPos = p !== null && p >= 0;
+        return `
+          <div class="lb-row">
+            <div class="lb-rank ${ranks[i]||''}">${i+1}</div>
+            <div>
+              <div class="lb-store" style="color:${STORE_COLORS[s]}">${s}</div>
+              <div style="font-family:var(--font-mono);font-size:10px;color:var(--muted);">${fmtK(cur)}</div>
+            </div>
+            <div style="flex:1;margin:0 12px;">
+              <div class="lb-bar-bg"><div class="lb-bar-fill" style="width:${p!==null?Math.min(Math.abs(p)/15*100,100).toFixed(0):0}%;background:${isPos?'var(--green)':'var(--red)'};"></div></div>
+            </div>
+            <div class="lb-val" style="color:${isPos?'var(--green)':'var(--red)'}">
+              ${p !== null ? (isPos?'▲':'▼') + Math.abs(p).toFixed(1)+'%' : '—'}
+            </div>
+          </div>
+        `;
+      }).join('')}
+    </div>
+  `;
+}
+
+// ============================================================
+// HEATMAP TABLE
+// ============================================================
+function renderHeatmap() {
+  const table = document.getElementById('heatmapTable');
+  let html = `
+    <thead>
+      <tr>
+        <th>WEEK</th>
+        ${STORES.map(s => `<th class="store-header" style="color:${STORE_COLORS[s]}">${s.toUpperCase()}</th>`).join('')}
+        <th style="color:var(--accent)">CO. TOTAL</th>
+        <th>WoW %</th>
+      </tr>
+    </thead>
+    <tbody>
+  `;
+
+  RAW_DATA.forEach((row, i) => {
+    const prev = i > 0 ? RAW_DATA[i-1] : null;
+    const total = companyWeek(row);
+    const prevTotal = prev ? companyWeek(prev) : null;
+    const totalPct = pct(total, prevTotal);
+
+    html += `<tr>`;
+    html += `<td>${row.week}</td>`;
+
+    STORES.forEach(s => {
+      const val = row[s];
+      const prevVal = prev ? prev[s] : null;
+      const p = pct(val, prevVal);
+      const cls = heatClass(p);
+      html += `<td><span class="cell-value ${cls}">${fmt(val)}</span></td>`;
+    });
+
+    // Company total
+    html += `<td><span class="cell-value company-avg">${fmtK(total)}</span></td>`;
+
+    // WoW total
+    const wCls = heatClass(totalPct);
+    const sign = totalPct !== null ? (totalPct >= 0 ? '+' : '') : '';
+    html += `<td><span class="cell-value ${wCls}">${totalPct !== null ? sign+totalPct.toFixed(1)+'%' : '—'}</span></td>`;
+    html += `</tr>`;
+  });
+
+  html += '</tbody>';
+  table.innerHTML = html;
+}
+
+// ============================================================
+// STORE DETAIL
+// ============================================================
+function initStoreSelect() {
+  const sel = document.getElementById('storeSelect');
+  STORES.forEach(s => {
+    const opt = document.createElement('option');
+    opt.value = s;
+    opt.textContent = s + ' — Individual Store View';
+    sel.appendChild(opt);
+  });
+}
+
+function renderStoreDetail() {
+  const store = document.getElementById('storeSelect').value;
+  const color = STORE_COLORS[store];
+  const vals = RAW_DATA.map(r => r[store]).filter(v=>v);
+  const ytd = ytdFor(store);
+  const avg = avgFor(store);
+  const peak = peakFor(store);
+  const min = minFor(store);
+  const latest = RAW_DATA[RAW_DATA.length-1][store];
+  const prev    = RAW_DATA[RAW_DATA.length-2][store];
+  const wowP    = pct(latest, prev);
+
+  // 4-week rolling avg
+  const last4 = lastNWeeks(store, 4);
+  const roll4 = last4.reduce((a,b)=>a+b,0) / last4.length;
+
+  const content = document.getElementById('storeDetailContent');
+  content.innerHTML = `
+    <div style="border-left: 4px solid ${color}; padding-left: 20px; margin-bottom: 32px;">
+      <div style="font-family:var(--font-display);font-size:56px;letter-spacing:6px;color:${color};text-shadow:0 0 30px ${color}66;">${store.toUpperCase()}</div>
+      <div style="font-family:var(--font-mono);font-size:11px;color:var(--muted);letter-spacing:3px;">INDIVIDUAL STORE PERFORMANCE ANALYSIS</div>
+    </div>
+
+    <div class="kpi-strip" style="grid-template-columns:repeat(5,1fr);margin-bottom:28px;">
+      <div class="kpi-card">
+        <div class="kpi-label">YTD TOTAL</div>
+        <div class="kpi-value" style="color:${color}">${fmtK(ytd)}</div>
+        <div class="kpi-sub">2025 Year to Date</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">WEEKLY AVERAGE</div>
+        <div class="kpi-value" style="color:${color};font-size:28px">${fmtK(avg)}</div>
+        <div class="kpi-sub">Per Week Avg</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">LAST WEEK</div>
+        <div class="kpi-value" style="color:${wowP>=0?'var(--green)':'var(--red)'}">${fmtK(latest)}</div>
+        <div class="kpi-badge ${wowP>=0?'up':'down'}">${wowP>=0?'▲':'▼'} ${Math.abs(wowP).toFixed(1)}% WoW</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">PEAK WEEK</div>
+        <div class="kpi-value" style="color:var(--yellow)">${fmtK(peak)}</div>
+        <div class="kpi-sub">Best Performance</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">4-WK ROLLING AVG</div>
+        <div class="kpi-value" style="font-size:28px;color:${color}">${fmtK(roll4)}</div>
+        <div class="kpi-sub">vs ${fmtK(avg)} season avg</div>
+      </div>
+    </div>
+
+    <div class="trend-chart" style="border-color:${color}33">
+      <div class="kpi-label" style="margin-bottom:8px;">WEEKLY PERFORMANCE — FULL YEAR</div>
+      <div class="bar-chart-container" id="storeChart"></div>
+    </div>
+
+    <div class="heatmap-container" style="margin-top:20px;">
+      <table id="storeTable">
+        <thead>
+          <tr>
+            <th style="text-align:left">WEEK</th>
+            <th>NET SALES</th>
+            <th>WoW CHANGE</th>
+            <th>VS YTD AVG</th>
+            <th>RANK</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${RAW_DATA.map((row, i) => {
+            const val = row[store];
+            const prevVal = i > 0 ? RAW_DATA[i-1][store] : null;
+            const wPct = pct(val, prevVal);
+            const vAvg = val ? pct(val, avg) : null;
+            // rank this store among others this week
+            const weekVals = STORES.map(s => ({s, v: row[s]||0})).sort((a,b)=>b.v-a.v);
+            const rank = weekVals.findIndex(x=>x.s===store) + 1;
+            const cls = heatClass(wPct);
+            const sign = wPct !== null ? (wPct>=0?'+':'') : '';
+            const asign = vAvg !== null ? (vAvg>=0?'+':'') : '';
+            return `
+              <tr>
+                <td>${row.week}</td>
+                <td><span class="cell-value ${val ? '' : 'no-data'}">${fmt(val)}</span></td>
+                <td><span class="cell-value ${cls}">${wPct !== null ? sign+wPct.toFixed(1)+'%' : '—'}</span></td>
+                <td><span class="cell-value ${heatClass(vAvg)}">${vAvg !== null ? asign+vAvg.toFixed(1)+'%' : '—'}</span></td>
+                <td style="text-align:center;font-family:var(--font-mono);color:${rank<=2?'var(--yellow)':'var(--muted)'};">${rank<=1?'🥇':rank<=2?'🥈':rank<=3?'🥉':'#'+rank}</td>
+              </tr>
+            `;
+          }).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
+
+  // Render store sparkline chart
+  const maxV = peakFor(store);
+  const chartEl = document.getElementById('storeChart');
+  RAW_DATA.forEach((row, i) => {
+    const val = row[store] || 0;
+    const prevVal = i > 0 ? (RAW_DATA[i-1][store] || 0) : val;
+    const h = Math.round((val / maxV) * 100);
+    const isUp = val >= prevVal;
+    const group = document.createElement('div');
+    group.className = 'bar-group';
+    group.innerHTML = `
+      <div class="bar" style="height:${h}%;background:${isUp ? color : 'var(--red)'};opacity:0.8;"></div>
+      <div class="bar-label">${row.week.split('-')[0]}</div>
+    `;
+    chartEl.appendChild(group);
+  });
+}
+
+// ============================================================
+// VELOCITY VIEW
+// ============================================================
+function renderVelocity() {
+  const content = document.getElementById('velocityContent');
+
+  // Calculate 4-week rolling averages and trend direction for each store
+  const storeStats = STORES.map(s => {
+    const recent4 = lastNWeeks(s, 4).reduce((a,b)=>a+b,0) / Math.min(4, lastNWeeks(s,4).length);
+    const prior4 = RAW_DATA.slice(-8,-4).map(r=>r[s]).filter(v=>v);
+    const prior4avg = prior4.length ? prior4.reduce((a,b)=>a+b,0)/prior4.length : recent4;
+    const trendPct = pct(recent4, prior4avg);
+    const ytd = ytdFor(s);
+    const avg = avgFor(s);
+
+    // consecutive up/down streak
+    let streak = 0, streakDir = null;
+    for (let i = RAW_DATA.length-1; i >= 1; i--) {
+      const cur = RAW_DATA[i][s], prv = RAW_DATA[i-1][s];
+      if (!cur || !prv) break;
+      const up = cur > prv;
+      if (streakDir === null) { streakDir = up; streak = 1; }
+      else if (up === streakDir) streak++;
+      else break;
+    }
+
+    return { store: s, recent4, trendPct, ytd, avg, streak, streakDir };
+  });
+
+  content.innerHTML = `
+    <div class="store-grid">
+      ${storeStats.map(st => {
+        const color = STORE_COLORS[st.store];
+        const isHot = st.trendPct > 3;
+        const isCold = st.trendPct < -3;
+        return `
+          <div class="store-card">
+            <div class="store-card-accent" style="background:linear-gradient(90deg,${color},transparent)"></div>
+            <div class="store-card-header">
+              <div>
+                <div class="store-name" style="color:${color}">${st.store.toUpperCase()}</div>
+                <div class="store-rank" style="margin-top:2px;">
+                  ${isHot ? '<span style="color:var(--green)">🔥 TRENDING UP</span>' : isCold ? '<span style="color:var(--red)">❄️ TRENDING DOWN</span>' : '<span style="color:var(--muted)">➡ STABLE</span>'}
+                </div>
+              </div>
+              <div style="text-align:right">
+                <div class="kpi-label">4-WK ROLL AVG</div>
+                <div style="font-family:var(--font-display);font-size:24px;color:${color}">${fmtK(st.recent4)}</div>
+              </div>
+            </div>
+
+            <div class="store-metrics">
+              <div class="store-metric">
+                <div class="store-metric-label">vs Prior 4-Wk</div>
+                <div class="store-metric-value" style="color:${st.trendPct>=0?'var(--green)':'var(--red)'}">
+                  ${st.trendPct>=0?'+':''}${st.trendPct.toFixed(1)}%
+                </div>
+              </div>
+              <div class="store-metric">
+                <div class="store-metric-label">YTD Total</div>
+                <div class="store-metric-value" style="color:${color};font-size:18px">${fmtK(st.ytd)}</div>
+              </div>
+              <div class="store-metric">
+                <div class="store-metric-label">Season Avg</div>
+                <div class="store-metric-value" style="font-size:18px">${fmtK(st.avg)}</div>
+              </div>
+              <div class="store-metric">
+                <div class="store-metric-label">Streak</div>
+                <div class="store-metric-value" style="color:${st.streakDir?'var(--green)':'var(--red)'}">
+                  ${st.streakDir ? '▲' : '▼'} ${st.streak}WK
+                </div>
+              </div>
+            </div>
+
+            <div class="spark-label">12-WEEK TREND</div>
+            <div style="display:flex;align-items:flex-end;gap:3px;height:50px;">
+              ${RAW_DATA.slice(-12).map((row,i,arr) => {
+                const val = row[st.store] || 0;
+                const prevVal = i > 0 ? (arr[i-1][st.store] || 0) : val;
+                const maxV = Math.max(...arr.map(r=>r[st.store]||0));
+                const h = Math.round((val/maxV)*100);
+                const up = val >= prevVal;
+                return `<div style="flex:1;height:${h}%;background:${up?color:'var(--red)'};opacity:0.8;border-radius:1px 1px 0 0;"></div>`;
+              }).join('')}
+            </div>
+          </div>
+        `;
+      }).join('')}
+    </div>
+  `;
+}
+
+// ============================================================
+// VIEW SWITCHING
+// ============================================================
+function setView(view) {
+  ['executive','heatmap','stores','velocity'].forEach(v => {
+    document.getElementById('view-'+v).classList.toggle('hidden', v !== view);
+  });
+  document.querySelectorAll('.view-btn').forEach((b,i) => {
+    const views = ['executive','heatmap','stores','velocity'];
+    b.classList.toggle('active', views[i] === view);
+  });
+  if (view === 'stores' && !document.getElementById('storeSelect').options.length) {
+    initStoreSelect();
+    renderStoreDetail();
+  }
+}
+
+// ============================================================
+// INIT
+// ============================================================
+renderKPIs();
+renderMainChart();
+renderDeltaGrid();
+renderLeaderboard();
+renderHeatmap();
+renderVelocity();
+initStoreSelect();
+</script>
+</body>
+</html>

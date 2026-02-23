@@ -4,11 +4,11 @@
 // ============================================================
 
 require('dotenv').config();
-const express   = require('express');
-const cors      = require('cors');
-const path      = require('path');
-const NodeCache = require('node-cache');
-const fh        = require('./flowhub');
+const express    = require('express');
+const cors       = require('cors');
+const path       = require('path');
+const NodeCache  = require('node-cache');
+const fh         = require('./flowhub');
 
 const app   = express();
 const cache = new NodeCache({ stdTTL: parseInt(process.env.CACHE_TTL) || 300 });
@@ -18,7 +18,7 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '../public')));
 
-// ── Auth middleware ──────────────────────────────────────────
+// ── Auth middleware ────────────────────────────────────────────
 function auth(req, res, next) {
   const pw = process.env.DASHBOARD_PASSWORD;
   if (!pw) return next();
@@ -29,7 +29,7 @@ function auth(req, res, next) {
   res.status(401).json({ error: 'Unauthorized' });
 }
 
-// ── Cache wrapper ────────────────────────────────────────────
+// ── Cache helper ──────────────────────────────────────────────
 async function cached(key, ttl, fn) {
   const hit = cache.get(key);
   if (hit !== undefined) return hit;
@@ -38,14 +38,14 @@ async function cached(key, ttl, fn) {
   return result;
 }
 
-// ── Routes ───────────────────────────────────────────────────
+// ── Routes ────────────────────────────────────────────────────
 
-// Health — no auth
+// Health
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', uptime: process.uptime(), cacheKeys: cache.keys().length });
 });
 
-// Store list — no auth (no secrets exposed)
+// Store list
 app.get('/api/stores', async (req, res) => {
   try {
     const locations = await fh.getLocations();
@@ -55,7 +55,19 @@ app.get('/api/stores', async (req, res) => {
   }
 });
 
-// Executive dashboard — this week / last week / today for all stores
+// ★ DIAGNOSTIC — raw order sample so we can see actual field names
+app.get('/api/diag/order-sample', auth, async (req, res) => {
+  try {
+    const locations = await fh.getLocations();
+    const loc = locations[0]; // first store
+    const sample = await fh.getRawOrderSample(loc.importId);
+    res.json({ store: loc.name, ...sample });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Executive dashboard
 app.get('/api/dashboard', auth, async (req, res) => {
   try {
     const data = await cached('dashboard', 300, () => fh.getDashboardData());
@@ -67,13 +79,10 @@ app.get('/api/dashboard', auth, async (req, res) => {
 });
 
 // Weekly trend — all stores
-// ?weeks=12
 app.get('/api/trend', auth, async (req, res) => {
   const weeks = Math.min(parseInt(req.query.weeks) || 12, 52);
   try {
-    const data = await cached(`trend_all_${weeks}`, 600, () =>
-      fh.getAllStoresWeeklyTrend(weeks)
-    );
+    const data = await cached(`trend_all_${weeks}`, 600, () => fh.getAllStoresWeeklyTrend(weeks));
     res.json(data);
   } catch (err) {
     console.error('Trend error:', err.message);
@@ -82,36 +91,28 @@ app.get('/api/trend', auth, async (req, res) => {
 });
 
 // Weekly trend — single store
-// ?store=cactus&weeks=12
 app.get('/api/trend/:storeId', auth, async (req, res) => {
   const weeks = Math.min(parseInt(req.query.weeks) || 12, 52);
   try {
     const locations = await fh.getLocations();
     const loc = locations.find(l => l.id === req.params.storeId);
     if (!loc) return res.status(404).json({ error: 'Store not found' });
-
-    const data = await cached(`trend_${loc.id}_${weeks}`, 600, () =>
-      fh.getWeeklyTrend(loc.importId, weeks)
-    );
+    const data = await cached(`trend_${loc.id}_${weeks}`, 600, () => fh.getWeeklyTrend(loc.importId, weeks));
     res.json({ store: loc, trend: data });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// Sales for a date range — all stores or single store
-// ?start=2025-01-01&end=2025-01-07
-// ?start=...&end=...&store=cactus
+// Sales for a date range
 app.get('/api/sales', auth, async (req, res) => {
   const { start, end, store } = req.query;
   if (!start || !end) return res.status(400).json({ error: 'start and end required (YYYY-MM-DD)' });
-
   try {
     if (store) {
       const locations = await fh.getLocations();
       const loc = locations.find(l => l.id === store);
       if (!loc) return res.status(404).json({ error: 'Store not found' });
-
       const data = await cached(`sales_${store}_${start}_${end}`, 300, async () => {
         const { orders } = await fh.getOrdersForLocation(loc.importId, start, end);
         return { store: loc, summary: fh.summarizeOrders(orders) };
@@ -131,17 +132,14 @@ app.get('/api/sales', auth, async (req, res) => {
   }
 });
 
-// Top products for a store + date range
-// ?store=cactus&start=...&end=...&limit=15
+// Top products
 app.get('/api/products', auth, async (req, res) => {
   const { store, start, end, limit = 15 } = req.query;
   if (!store || !start || !end) return res.status(400).json({ error: 'store, start, end required' });
-
   try {
     const locations = await fh.getLocations();
     const loc = locations.find(l => l.id === store);
     if (!loc) return res.status(404).json({ error: 'Store not found' });
-
     const data = await cached(`products_${store}_${start}_${end}_${limit}`, 600, async () => {
       const { orders } = await fh.getOrdersForLocation(loc.importId, start, end);
       return { store: loc, products: fh.extractTopProducts(orders, parseInt(limit)) };
@@ -152,21 +150,17 @@ app.get('/api/products', auth, async (req, res) => {
   }
 });
 
-// Category breakdown for a store + date range
-// ?store=cactus&start=...&end=...
+// Categories
 app.get('/api/categories', auth, async (req, res) => {
   const { store, start, end } = req.query;
   if (!store || !start || !end) return res.status(400).json({ error: 'store, start, end required' });
-
   try {
     const locations = await fh.getLocations();
     const loc = locations.find(l => l.id === store);
     if (!loc) return res.status(404).json({ error: 'Store not found' });
-
     const data = await cached(`cats_${store}_${start}_${end}`, 600, async () => {
       const { orders } = await fh.getOrdersForLocation(loc.importId, start, end);
-      const summary = fh.summarizeOrders(orders);
-      return { store: loc, categories: summary.categories };
+      return { store: loc, categories: fh.summarizeOrders(orders).categories };
     });
     res.json(data);
   } catch (err) {
@@ -174,21 +168,17 @@ app.get('/api/categories', auth, async (req, res) => {
   }
 });
 
-// Budtender performance for a store + date range
-// ?store=cactus&start=...&end=...
+// Budtender performance
 app.get('/api/employees', auth, async (req, res) => {
   const { store, start, end } = req.query;
   if (!store || !start || !end) return res.status(400).json({ error: 'store, start, end required' });
-
   try {
     const locations = await fh.getLocations();
     const loc = locations.find(l => l.id === store);
     if (!loc) return res.status(404).json({ error: 'Store not found' });
-
     const data = await cached(`emp_${store}_${start}_${end}`, 600, async () => {
       const { orders } = await fh.getOrdersForLocation(loc.importId, start, end);
-      const summary = fh.summarizeOrders(orders);
-      return { store: loc, employees: summary.budtenders };
+      return { store: loc, employees: fh.summarizeOrders(orders).budtenders };
     });
     res.json(data);
   } catch (err) {
@@ -208,16 +198,14 @@ app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, '../public/index.html'));
 });
 
-// ── Start ────────────────────────────────────────────────────
+// ── Start ─────────────────────────────────────────────────────
 app.listen(PORT, async () => {
   console.log(`\n🌿 THRIVE DASHBOARD — port ${PORT}\n`);
-  // Warm up: get token + locations on start
   try {
     await fh.getLocations();
     console.log('✓ Ready\n');
   } catch (err) {
     console.warn('⚠ Location warm-up failed:', err.message);
-    console.warn('  Check FLOWHUB_CLIENT_ID and FLOWHUB_API_KEY in .env\n');
   }
 });
 
