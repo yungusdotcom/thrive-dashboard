@@ -71,14 +71,15 @@ app.get('/api/diag/order-sample', auth, async (req, res) => {
 app.get('/api/diag/date-test', auth, async (req, res) => {
   try {
     const locations = await fh.getLocations();
-    const loc = locations[0]; // Cactus
-    // Test last week
-    const lw = fh.weekRange(1);
-    const { total, orders } = await fh.getOrdersForLocation(loc.importId, lw.start, lw.end);
+    const storeId = req.query.store || locations[0].id;
+    const loc = locations.find(l => l.id === storeId) || locations[0];
+    const start = req.query.start || fh.weekRange(1).start;
+    const end = req.query.end || fh.weekRange(1).end;
+    const { total, orders } = await fh.getOrdersForLocation(loc.importId, start, end);
     res.json({
       store: loc.name,
       importId: loc.importId,
-      dateRange: lw,
+      dateRange: { start, end },
       total,
       ordersReturned: orders.length,
       firstOrderDate: orders[0]?.createdAt || null,
