@@ -170,6 +170,10 @@ async function getOrdersForLocation(importId, startDate, endDate) {
 }
 
 // ── Summarize orders → KPIs ───────────────────────────────────
+// Flowhub schema (confirmed from live API):
+//   Order: { budtender, customerType, orderStatus, totals: { finalTotal, subTotal, totalDiscounts, totalFees, totalTaxes } }
+//   Item:  { totalPrice (gross), totalDiscounts (flat number), totalCost, unitPrice, quantity, category, brand, productName, type }
+//   Pre-tax net sales per item = totalPrice - totalDiscounts
 function summarizeOrders(orders) {
   if (!orders || !orders.length) {
     return {
@@ -188,69 +192,49 @@ function summarizeOrders(orders) {
   const ctypes = { rec: 0, med: 0 };
 
   orders.forEach(order => {
+    // Skip voided orders
+    if (order.voided === true || order.orderStatus === 'voided') return;
+
     // Customer type
     const ctype = (order.customerType || '').toLowerCase();
     if (ctype.includes('med')) ctypes.med++;
     else ctypes.rec++;
 
     // Budtender
-    const bt = order.budtender || order.fulfilledBy || order.fullName || 'Unknown';
+    const bt = order.budtender || 'Unknown';
     if (!btMap[bt]) btMap[bt] = { name: bt, transactions: 0, net_sales: 0, items: 0 };
     btMap[bt].transactions++;
-
-    // ── Order-level totals (preferred — most accurate) ──
-    // Flowhub may provide order-level totalPrice / totalBeforeTax / subtotal / etc.
-    // We try order-level first, then fall back to item-level computation.
-    const orderTotal = order.orderTotal || order.totalPrice || order.totalBeforeTax
-                    || order.subtotal || order.total || order.netSales || order.net_sales || null;
-    const orderDiscount = order.totalDiscount || order.discountAmount || order.orderDiscount || 0;
 
     let orderNet = 0;
     let orderGross = 0;
     let orderItems = 0;
 
-    if (orderTotal !== null && orderTotal > 0) {
-      // Use order-level total
-      orderGross = Number(orderTotal);
-      orderNet = orderGross - Number(orderDiscount);
-      orderItems = (order.itemsInCart || []).reduce((s, item) => s + (item.quantity || 1), 0);
+    // Iterate items — use item-level totalPrice and totalDiscounts
+    (order.itemsInCart || []).forEach(item => {
+      if (item.voided === true) return;
 
-      // Still iterate items for category + budtender breakdowns
-      (order.itemsInCart || []).forEach(item => {
-        const qty = item.quantity || 1;
-        const cat = item.category || item.productType || item.productCategory || 'Other';
-        if (!catMap[cat]) catMap[cat] = { name: cat, net_sales: 0, units: 0, transactions: 0 };
-        // Proportional allocation based on items if order-level
-        const itemShare = qty / Math.max(orderItems, 1);
-        catMap[cat].net_sales += orderNet * itemShare;
-        catMap[cat].units += qty;
-        catMap[cat].transactions++;
-      });
-    } else {
-      // Fall back to item-level computation
-      (order.itemsInCart || []).forEach(item => {
-        const qty = item.quantity || 1;
-        orderItems += qty;
+      const qty = item.quantity || 1;
+      orderItems += qty;
 
-        // Try every possible price field
-        const price = item.price || item.unitPrice || item.pricePerUnit
-                   || item.salePrice || item.retailPrice || 0;
-        const lineGross = item.lineTotal || item.totalPrice || item.total
-                       || item.extendedPrice || item.subtotal || (price * qty);
-        const discount = (item.itemDiscounts || item.discounts || [])
-          .reduce((s, d) => s + (d.discountAmount || d.amount || 0), 0);
-        const lineNet = lineGross - discount;
+      // Gross = totalPrice (this is unitPrice × quantity, before discounts)
+      const lineGross = Number(item.totalPrice) || (Number(item.unitPrice || 0) * qty);
 
-        orderGross += lineGross;
-        orderNet += lineNet;
+      // Discount = totalDiscounts (flat number on item, NOT an array)
+      const discount = Number(item.totalDiscounts) || 0;
 
-        const cat = item.category || item.productType || item.productCategory || 'Other';
-        if (!catMap[cat]) catMap[cat] = { name: cat, net_sales: 0, units: 0, transactions: 0 };
-        catMap[cat].net_sales += lineNet;
-        catMap[cat].units += qty;
-        catMap[cat].transactions++;
-      });
-    }
+      // Net = gross - discounts (pre-tax)
+      const lineNet = lineGross - discount;
+
+      orderGross += lineGross;
+      orderNet += lineNet;
+
+      // Category breakdown
+      const cat = item.category || item.type || 'Other';
+      if (!catMap[cat]) catMap[cat] = { name: cat, net_sales: 0, units: 0, transactions: 0 };
+      catMap[cat].net_sales += lineNet;
+      catMap[cat].units += qty;
+      catMap[cat].transactions++;
+    });
 
     net_sales += orderNet;
     gross_sales += orderGross;
@@ -287,21 +271,23 @@ function round2(n) { return Math.round(n * 100) / 100; }
 function extractTopProducts(orders, limit = 15) {
   const map = {};
   orders.forEach(order => {
+    if (order.voided === true) return;
     (order.itemsInCart || []).forEach(item => {
-      const name  = item.name || item.productName || item.product || 'Unknown';
-      const brand = item.brand || item.brandName || item.manufacturer || '';
-      const cat   = item.category || item.productType || 'Other';
+      if (item.voided === true) return;
+      const name  = item.productName || item.title1 || 'Unknown';
+      const brand = item.brand || '';
+      const cat   = item.category || item.type || 'Other';
       const qty   = item.quantity || 1;
-      const price = item.price || item.unitPrice || item.pricePerUnit || 0;
-      const gross = item.lineTotal || item.totalPrice || item.total || (price * qty);
-      const disc  = (item.itemDiscounts || item.discounts || [])
-        .reduce((s, d) => s + (d.discountAmount || d.amount || 0), 0);
+      const gross = Number(item.totalPrice) || 0;
+      const disc  = Number(item.totalDiscounts) || 0;
+      const net   = gross - disc;
 
       const key = `${name}__${brand}`;
-      if (!map[key]) map[key] = { name, brand, category: cat, units_sold: 0, net_sales: 0, prices: [] };
+      if (!map[key]) map[key] = { name, brand, category: cat, units_sold: 0, net_sales: 0, gross_sales: 0, prices: [] };
       map[key].units_sold += qty;
-      map[key].net_sales += gross - disc;
-      if (price) map[key].prices.push(price);
+      map[key].net_sales += net;
+      map[key].gross_sales += gross;
+      if (item.unitPrice) map[key].prices.push(Number(item.unitPrice));
     });
   });
 
