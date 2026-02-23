@@ -67,6 +67,28 @@ app.get('/api/diag/order-sample', auth, async (req, res) => {
   }
 });
 
+// ★ DIAGNOSTIC — test date range query for a specific store + week
+app.get('/api/diag/date-test', auth, async (req, res) => {
+  try {
+    const locations = await fh.getLocations();
+    const loc = locations[0]; // Cactus
+    // Test last week
+    const lw = fh.weekRange(1);
+    const { total, orders } = await fh.getOrdersForLocation(loc.importId, lw.start, lw.end);
+    res.json({
+      store: loc.name,
+      importId: loc.importId,
+      dateRange: lw,
+      total,
+      ordersReturned: orders.length,
+      firstOrderDate: orders[0]?.createdAt || null,
+      lastOrderDate: orders[orders.length - 1]?.createdAt || null,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Executive dashboard
 app.get('/api/dashboard', auth, async (req, res) => {
   try {

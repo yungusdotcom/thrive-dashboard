@@ -117,6 +117,7 @@ function ytdRange() {
 
 // ── Fetch orders ──────────────────────────────────────────────
 let _schemaLogged = false;
+let _dateParamLogged = false;
 
 async function getOrdersForLocation(importId, startDate, endDate) {
   const PAGE_SIZE = 10000;
@@ -124,10 +125,14 @@ async function getOrdersForLocation(importId, startDate, endDate) {
   let allOrders = [];
   let total = 0;
 
+  // Flowhub expects ISO datetime strings, not just dates
+  const startISO = startDate.includes('T') ? startDate : startDate + 'T00:00:00.000Z';
+  const endISO   = endDate.includes('T')   ? endDate   : endDate   + 'T23:59:59.999Z';
+
   while (true) {
     const data = await flowhubGet(`/v1/orders/findByLocationId/${importId}`, {
-      created_after:  startDate,
-      created_before: endDate,
+      created_after:  startISO,
+      created_before: endISO,
       page_size:      PAGE_SIZE,
       page,
       order_by:       'asc',
@@ -136,6 +141,12 @@ async function getOrdersForLocation(importId, startDate, endDate) {
     const batch = data.orders || [];
     total = data.total || 0;
     allOrders = allOrders.concat(batch);
+
+    // Log date params + result count ONCE for debugging
+    if (!_dateParamLogged) {
+      _dateParamLogged = true;
+      console.log(`DATE PARAM TEST: created_after=${startISO} created_before=${endISO} → ${total} orders`);
+    }
 
     // Log the schema of the first order + first item ONCE so we can see real field names
     if (!_schemaLogged && batch.length > 0) {
