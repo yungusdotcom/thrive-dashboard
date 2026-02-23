@@ -61,18 +61,18 @@ async function getLocations() {
 
   _locations = raw
     .filter(loc => !EXCLUDED_STORES.some(ex =>
-      (loc.name || '').toLowerCase().includes(ex.toLowerCase())
+      (loc.locationName || loc.name || '').toLowerCase().includes(ex.toLowerCase())
     ))
     .map(loc => {
       const cfg = STORE_CONFIG.find(s =>
-        (loc.name || '').toLowerCase().includes(s.name.toLowerCase()) ||
-        s.name.toLowerCase().includes((loc.name || '').toLowerCase())
+        (loc.locationName || loc.name || '').toLowerCase().includes(s.name.toLowerCase()) ||
+        s.name.toLowerCase().includes((loc.locationName || loc.name || '').toLowerCase())
       );
       const importId = loc.locationId || loc.importId || loc.import_id || loc._id || loc.id;
       return {
         importId,
         name:  loc.name,
-        id:    cfg?.id    || (loc.name || '').toLowerCase().replace(/\s+/g, '_'),
+        id:    cfg?.id    || (loc.locationName || loc.name || '').toLowerCase().replace(/\s+/g, '_'),
         color: cfg?.color || '#888888',
       };
     });
