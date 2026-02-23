@@ -22,7 +22,7 @@ const STORE_CONFIG = [
   { id: 'sammy',    name: 'Sammy',       color: '#a8e6cf' },
 ];
 
-const EXCLUDED_STORES = ['Smoke & Mirrors', 'MBNV'];
+const EXCLUDED_STORES = ['Smoke & Mirrors', 'MBNV', 'Cultivation', 'RC078'];
 
 // ── Core GET — key + clientId as headers ─────────────────────
 async function flowhubGet(path, params = {}) {
@@ -68,7 +68,7 @@ async function getLocations() {
         (loc.name || '').toLowerCase().includes(s.name.toLowerCase()) ||
         s.name.toLowerCase().includes((loc.name || '').toLowerCase())
       );
-      const importId = loc.importId || loc.import_id || loc._id || loc.id || loc.locationId || loc.location_id;
+      const importId = loc.locationId || loc.importId || loc.import_id || loc._id || loc.id;
       return {
         importId,
         name:  loc.name,
