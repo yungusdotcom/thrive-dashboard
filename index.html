@@ -444,11 +444,11 @@ function renderExecutive() {
     return val > (best?.thisWeek?.net_sales || 0) ? st : best;
   }, storeData[0]);
 
-  // KPIs
+  // KPIs — no WoW% on current week since it's partial/in-progress
   const kpis = [
     { label: 'TODAY (ALL STORES)', value: fmtK(todayTotal), sub: `${twTxn} transactions • Live` },
-    { label: 'THIS WEEK', value: fmtK(twTotal), sub: `${d.meta.dateRanges.thisWeek.start} → ${d.meta.dateRanges.thisWeek.end}`, change: wowPct, changeLabel: 'vs last week' },
-    { label: 'LAST WEEK', value: fmtK(lwTotal), sub: 'Prior week total' },
+    { label: 'THIS WEEK (IN PROGRESS)', value: fmtK(twTotal), sub: `${d.meta.dateRanges.thisWeek.start} → ${d.meta.dateRanges.thisWeek.end}` },
+    { label: 'LAST WEEK', value: fmtK(lwTotal), sub: 'Completed week total' },
     { label: 'AVG BASKET (TODAY)', value: fmt(twAvgBasket), sub: `${twTxn} transactions` },
     { label: 'WEEK LEADER', value: leader?.name || '—', sub: fmtK(leader?.thisWeek?.net_sales) + ' this week', isText: true },
   ];
@@ -462,17 +462,15 @@ function renderExecutive() {
     </div>
   `).join('');
 
-  // Store grid
+  // Store grid — no WoW% since current week is partial
   document.getElementById('storeGrid').innerHTML = storeData.map(st => {
     const tw = st.thisWeek?.net_sales || 0;
     const lw = st.lastWeek?.net_sales || 0;
-    const change = pctChange(tw, lw);
     const color = stores.find(s => s.id === st.id)?.color || '#888';
     return `
       <div class="store-card" style="border-left-color:${color}" onclick="switchToStore('${st.id}')">
         <div class="sname">${st.name}</div>
         <div class="sval">${fmtK(tw)}</div>
-        <div class="schange ${pctClass(change)}">${pctFmt(change)}</div>
         <div style="font-family:var(--mono);font-size:9px;color:var(--muted);margin-top:4px;">LW: ${fmtK(lw)}</div>
       </div>
     `;
@@ -485,16 +483,27 @@ function renderExecutive() {
 function renderRankings(storeData) {
   // Revenue ranking
   const byRev = [...storeData].sort((a, b) => (b.thisWeek?.net_sales || 0) - (a.thisWeek?.net_sales || 0));
-  // Momentum ranking (WoW %)
-  const byMom = [...storeData].map(st => ({
-    ...st,
-    wow: pctChange(st.thisWeek?.net_sales, st.lastWeek?.net_sales),
-  })).sort((a, b) => (b.wow || -999) - (a.wow || -999));
+  // Momentum: use trend data for last 2 COMPLETED weeks if available, else skip
+  let byMom = [];
+  if (trendData && trendData.length > 0) {
+    byMom = storeData.map(st => {
+      const storeTrend = trendData.find(t => t.store.id === st.id);
+      const trend = storeTrend?.trend || [];
+      // Last completed week = second to last (last is current/partial)
+      const lw = trend.length >= 2 ? trend[trend.length - 2]?.summary?.net_sales : null;
+      const w2 = trend.length >= 3 ? trend[trend.length - 3]?.summary?.net_sales : null;
+      return { ...st, wow: pctChange(lw, w2), lwSales: lw };
+    }).sort((a, b) => (b.wow || -999) - (a.wow || -999));
+  } else {
+    // Fallback: just show last week revenue, no %
+    byMom = [...storeData].map(st => ({ ...st, wow: null, lwSales: st.lastWeek?.net_sales }))
+      .sort((a, b) => (b.lwSales || 0) - (a.lwSales || 0));
+  }
 
   document.getElementById('rankingsSection').innerHTML = `
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
       <div class="chart-container">
-        <div class="chart-header"><h3>THIS WEEK REVENUE</h3></div>
+        <div class="chart-header"><h3>THIS WEEK REVENUE (IN PROGRESS)</h3></div>
         ${byRev.map((st, i) => {
           const val = st.thisWeek?.net_sales || 0;
           const maxVal = byRev[0]?.thisWeek?.net_sales || 1;
@@ -511,14 +520,14 @@ function renderRankings(storeData) {
         }).join('')}
       </div>
       <div class="chart-container">
-        <div class="chart-header"><h3>WoW MOMENTUM</h3></div>
+        <div class="chart-header"><h3>WoW MOMENTUM (COMPLETED WEEKS)</h3></div>
         ${byMom.map((st, i) => {
           const color = stores.find(s => s.id === st.id)?.color || '#888';
           return `<div style="display:flex;align-items:center;gap:12px;margin-bottom:8px;">
             <span style="font-family:var(--mono);font-size:10px;color:var(--muted);width:16px;">${i+1}</span>
             <span style="font-weight:600;font-size:13px;width:100px;">${st.name}</span>
             <span style="font-family:var(--mono);font-size:12px;font-weight:600;color:${st.wow != null && st.wow >= 0 ? 'var(--green)' : 'var(--red)'}">${pctFmt(st.wow)}</span>
-            <span style="font-family:var(--mono);font-size:11px;color:var(--muted);margin-left:auto;">${fmtK(st.thisWeek?.net_sales)}</span>
+            <span style="font-family:var(--mono);font-size:11px;color:var(--muted);margin-left:auto;">${fmtK(st.lwSales)}</span>
           </div>`;
         }).join('')}
       </div>
@@ -557,16 +566,25 @@ function renderTrendChart() {
 
   const maxVal = Math.max(...weeklyTotals.map(w => w.total), 1);
 
+  // Abbreviated format just for chart labels
+  const chartFmt = (v) => {
+    if (v >= 1000000) return '$' + (v/1000000).toFixed(1) + 'M';
+    if (v >= 1000) return '$' + (v/1000).toFixed(0) + 'K';
+    return '$' + Math.round(v);
+  };
+
   const bars = weeklyTotals.map((w, i) => {
-    const h = (w.total / maxVal * 160).toFixed(0);
+    const h = Math.max((w.total / maxVal * 180), 20).toFixed(0);
     const prev = i > 0 ? weeklyTotals[i-1].total : w.total;
     const change = pctChange(w.total, prev);
-    const color = change != null && change >= 0 ? 'var(--accent)' : 'var(--red)';
+    const isLast = i === numWeeks - 1;
+    const color = isLast ? 'var(--muted)' : (change != null && change >= 0 ? 'var(--accent)' : 'var(--red)');
     const label = w.week?.start?.slice(5) || '';
-    return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;">
-      <span style="font-family:var(--mono);font-size:9px;color:var(--muted);transform:rotate(-45deg);white-space:nowrap;">${fmtK(w.total)}</span>
-      <div style="width:80%;height:${h}px;background:${color};border-radius:2px 2px 0 0;transition:height .5s;opacity:${i === numWeeks-1 ? '0.5' : '1'}" title="${fmtK(w.total)}"></div>
-      <span style="font-family:var(--mono);font-size:9px;color:var(--muted)">${label}</span>
+    return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:0;">
+      <div style="width:90%;height:${h}px;background:${color};border-radius:3px 3px 0 0;transition:height .5s;opacity:${isLast ? '0.5' : '1'};position:relative;min-height:20px;cursor:default;" title="${fmtK(w.total)} (${pctFmt(change)})">
+        <span style="position:absolute;top:4px;left:50%;transform:translateX(-50%);font-family:var(--mono);font-size:12px;font-weight:800;color:#000;white-space:nowrap;">${chartFmt(w.total)}</span>
+      </div>
+      <span style="font-family:var(--mono);font-size:9px;color:var(--muted);margin-top:4px;">${label}</span>
     </div>`;
   }).join('');
 
@@ -575,7 +593,7 @@ function renderTrendChart() {
       <h3>ALL STORES COMBINED — WEEKLY NET SALES</h3>
       <div style="font-family:var(--mono);font-size:10px;color:var(--muted);">${numWeeks} WEEKS</div>
     </div>
-    <div style="display:flex;align-items:end;height:200px;gap:4px;padding-top:20px;">${bars}</div>
+    <div style="display:flex;align-items:end;height:240px;gap:6px;padding-top:10px;">${bars}</div>
     <div style="font-family:var(--mono);font-size:9px;color:var(--muted);margin-top:8px;text-align:center;">
       Current week (rightmost) is partial — <span style="opacity:0.5">shown at 50% opacity</span>
     </div>
