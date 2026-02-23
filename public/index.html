@@ -613,9 +613,11 @@ function renderHeatmap() {
   html += '<th>CO. TOTAL</th><th>WoW %</th></tr></thead><tbody>';
 
   for (let w = 0; w < numWeeks; w++) {
+    const isCurrentWeek = w === numWeeks - 1;
     const wk = trendData[0]?.trend[w]?.week;
     const weekLabel = wk ? wk.start.slice(5) + ' → ' + wk.end.slice(5) : 'W' + (w+1);
-    html += `<tr><td>${weekLabel}</td>`;
+    const rowStyle = isCurrentWeek ? 'opacity:0.6;' : '';
+    html += `<tr style="${rowStyle}"><td>${weekLabel}${isCurrentWeek ? ' *' : ''}</td>`;
 
     let weekTotal = 0;
     let prevWeekTotal = 0;
@@ -623,7 +625,8 @@ function renderHeatmap() {
     trendData.forEach(st => {
       const val = st.trend[w]?.summary?.net_sales || 0;
       const prev = w > 0 ? (st.trend[w-1]?.summary?.net_sales || 0) : val;
-      const change = w > 0 ? pctChange(val, prev) : null;
+      // No WoW% for current partial week
+      const change = (w > 0 && !isCurrentWeek) ? pctChange(val, prev) : null;
       weekTotal += val;
       if (w > 0) prevWeekTotal += (st.trend[w-1]?.summary?.net_sales || 0);
 
@@ -631,14 +634,20 @@ function renderHeatmap() {
       html += `<td style="background:${bg};color:var(--text);" title="${pctFmt(change)}">${fmtK(val)}</td>`;
     });
 
-    const wowTotal = w > 0 ? pctChange(weekTotal, prevWeekTotal) : null;
+    // No WoW% for current partial week
+    const wowTotal = (w > 0 && !isCurrentWeek) ? pctChange(weekTotal, prevWeekTotal) : null;
     const totalBg = heatColor(wowTotal);
     html += `<td style="background:${totalBg};font-weight:700;">${fmtK(weekTotal)}</td>`;
-    html += `<td style="font-weight:700;color:${wowTotal != null && wowTotal >= 0 ? 'var(--green)' : 'var(--red)'}">${pctFmt(wowTotal)}</td>`;
+    if (isCurrentWeek) {
+      html += '<td style="font-family:var(--mono);font-size:10px;color:var(--muted);">IN PROGRESS</td>';
+    } else {
+      html += `<td style="font-weight:700;color:${wowTotal != null && wowTotal >= 0 ? 'var(--green)' : 'var(--red)'}">${pctFmt(wowTotal)}</td>`;
+    }
     html += '</tr>';
   }
 
   html += '</tbody></table>';
+  html += '<div style="font-family:var(--mono);font-size:9px;color:var(--muted);margin-top:8px;">* Current week is in progress — no WoW% calculated</div>';
   document.getElementById('heatmapWrap').innerHTML = html;
 }
 
@@ -792,18 +801,26 @@ async function loadStoreDetail(storeId) {
   const tw = sd?.thisWeek;
   const lw = sd?.lastWeek;
   const td = sd?.today;
-  const wowPct = pctChange(tw?.net_sales, lw?.net_sales);
+
+  // WoW using last 2 completed weeks from trend (not partial current week)
+  let storeWow = null;
+  const stTrendRef = trendData?.find(st => st.store.id === storeId);
+  if (stTrendRef?.trend?.length >= 3) {
+    const lwVal = stTrendRef.trend[stTrendRef.trend.length - 2]?.summary?.net_sales;
+    const w2Val = stTrendRef.trend[stTrendRef.trend.length - 3]?.summary?.net_sales;
+    storeWow = pctChange(lwVal, w2Val);
+  }
 
   // Get trend for this store
   let storeTrend = null;
   const stTrend = trendData?.find(st => st.store.id === storeId);
   if (stTrend) storeTrend = stTrend.trend;
 
-  // Build KPIs
+  // Build KPIs — no WoW% on partial current week
   const kpis = [
     { label: 'TODAY', value: fmtK(td?.net_sales), sub: `${td?.transaction_count || 0} txns` },
-    { label: 'THIS WEEK', value: fmtK(tw?.net_sales), change: wowPct },
-    { label: 'LAST WEEK', value: fmtK(lw?.net_sales), sub: `${lw?.transaction_count || 0} txns` },
+    { label: 'THIS WEEK (IN PROGRESS)', value: fmtK(tw?.net_sales), sub: `${tw?.transaction_count || 0} txns` },
+    { label: 'LAST WEEK', value: fmtK(lw?.net_sales), sub: `${lw?.transaction_count || 0} txns`, change: storeWow, changeLabel: 'vs prior week' },
     { label: 'AVG BASKET (TW)', value: fmt(tw?.avg_basket), sub: `${tw?.transaction_count || 0} txns` },
   ];
 
@@ -817,31 +834,38 @@ async function loadStoreDetail(storeId) {
       <div class="label">${k.label}</div>
       <div class="value">${k.value}</div>
       ${k.sub ? `<div class="sub">${k.sub}</div>` : ''}
-      ${k.change != null ? `<div class="change ${pctClass(k.change)}">${pctFmt(k.change)} vs last week</div>` : ''}
+      ${k.change != null ? `<div class="change ${pctClass(k.change)}">${pctFmt(k.change)} ${k.changeLabel || ''}</div>` : ''}
     </div>
   `).join('')}</div>`;
 
-  // Weekly bars
+  // Weekly bars — match exec style: labels inside bars, neutral current week
   if (storeTrend && storeTrend.length > 0) {
     const maxVal = Math.max(...storeTrend.map(w => w.summary?.net_sales || 0), 1);
+    const chartFmtStore = (v) => {
+      if (v >= 1000000) return '$' + (v/1000000).toFixed(1) + 'M';
+      if (v >= 1000) return '$' + (v/1000).toFixed(0) + 'K';
+      return '$' + Math.round(v);
+    };
     const bars = storeTrend.map((w, i) => {
       const val = w.summary?.net_sales || 0;
       const prev = i > 0 ? (storeTrend[i-1]?.summary?.net_sales || 0) : val;
       const ch = i > 0 ? pctChange(val, prev) : null;
-      const color = ch != null && ch >= 0 ? storeInfo.color : 'var(--red)';
-      const h = (val / maxVal * 120).toFixed(0);
-      const label = w.week?.start?.slice(5) || '';
       const isLast = i === storeTrend.length - 1;
-      return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;">
-        <span style="font-family:var(--mono);font-size:8px;color:var(--muted)">${fmtK(val)}</span>
-        <div style="width:80%;height:${h}px;background:${color};border-radius:2px 2px 0 0;opacity:${isLast?'0.5':'1'}"></div>
-        <span style="font-family:var(--mono);font-size:8px;color:var(--muted)">${label}</span>
+      const color = isLast ? 'var(--muted)' : (ch != null && ch >= 0 ? storeInfo.color : 'var(--red)');
+      const h = Math.max((val / maxVal * 160), 20).toFixed(0);
+      const label = w.week?.start?.slice(5) || '';
+      return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:0;">
+        <div style="width:90%;height:${h}px;background:${color};border-radius:3px 3px 0 0;opacity:${isLast?'0.5':'1'};position:relative;min-height:20px;" title="${fmtK(val)} (${pctFmt(ch)})">
+          <span style="position:absolute;top:3px;left:50%;transform:translateX(-50%);font-family:var(--mono);font-size:10px;font-weight:800;color:#000;white-space:nowrap;">${chartFmtStore(val)}</span>
+        </div>
+        <span style="font-family:var(--mono);font-size:9px;color:var(--muted);margin-top:4px;">${label}</span>
       </div>`;
     }).join('');
 
     html += `<div class="chart-container">
       <div class="chart-header"><h3>${storeInfo.name.toUpperCase()} — 12-WEEK TREND</h3></div>
-      <div style="display:flex;align-items:end;height:160px;gap:3px;padding-top:16px;">${bars}</div>
+      <div style="display:flex;align-items:end;height:200px;gap:4px;padding-top:10px;">${bars}</div>
+      <div style="font-family:var(--mono);font-size:9px;color:var(--muted);margin-top:8px;text-align:center;">Current week (rightmost) is partial</div>
     </div>`;
   }
 
@@ -870,19 +894,22 @@ function renderVelocity() {
     const trend = st.trend || [];
     const storeInfo = stores.find(s => s.id === st.store.id) || st.store;
 
-    // 4-week rolling avg (recent)
-    const recent4 = trend.slice(-4).filter(w => w.summary);
-    const prior4 = trend.slice(-8, -4).filter(w => w.summary);
+    // Exclude last (current/partial) week for all calculations
+    const completed = trend.slice(0, -1);
+
+    // 4-week rolling avg (most recent completed)
+    const recent4 = completed.slice(-4).filter(w => w.summary);
+    const prior4 = completed.slice(-8, -4).filter(w => w.summary);
     const recentAvg = recent4.length > 0 ? recent4.reduce((s, w) => s + (w.summary.net_sales || 0), 0) / recent4.length : 0;
     const priorAvg = prior4.length > 0 ? prior4.reduce((s, w) => s + (w.summary.net_sales || 0), 0) / prior4.length : 0;
     const rollingPct = pctChange(recentAvg, priorAvg);
 
-    // Streak
+    // Streak (completed weeks only)
     let streak = 0;
     let streakDir = null;
-    for (let i = trend.length - 1; i > 0; i--) {
-      const curr = trend[i]?.summary?.net_sales || 0;
-      const prev = trend[i-1]?.summary?.net_sales || 0;
+    for (let i = completed.length - 1; i > 0; i--) {
+      const curr = completed[i]?.summary?.net_sales || 0;
+      const prev = completed[i-1]?.summary?.net_sales || 0;
       const dir = curr >= prev ? 'up' : 'down';
       if (streakDir === null) streakDir = dir;
       if (dir === streakDir) streak++;
@@ -896,8 +923,8 @@ function renderVelocity() {
     else if (rollingPct < -5) status = '❄️ COOLING';
     else if (rollingPct < 0) status = '📉 SOFTENING';
 
-    // Sparkline data
-    const sparkVals = trend.map(w => w.summary?.net_sales || 0);
+    // Sparkline data (completed weeks only)
+    const sparkVals = completed.map(w => w.summary?.net_sales || 0);
     const sparkMax = Math.max(...sparkVals, 1);
 
     return `<div class="vel-card">
@@ -909,7 +936,7 @@ function renderVelocity() {
       <div class="vrow"><span class="vl">4-WK ROLLING AVG</span><span style="font-weight:700">${fmtK(recentAvg)}</span></div>
       <div class="vrow"><span class="vl">vs PRIOR 4-WK</span><span class="${pctClass(rollingPct)}" style="font-weight:600">${pctFmt(rollingPct)}</span></div>
       <div class="vrow"><span class="vl">STREAK</span><span>${streak}W ${streakDir === 'up' ? '▲' : '▼'}</span></div>
-      <div class="vrow"><span class="vl">LAST WEEK</span><span style="font-weight:600">${fmtK(trend[trend.length-2]?.summary?.net_sales)}</span></div>
+      <div class="vrow"><span class="vl">LAST COMPLETED WEEK</span><span style="font-weight:600">${fmtK(completed[completed.length-1]?.summary?.net_sales)}</span></div>
       <div class="sparkline">${sparkVals.map(v => {
         const h = Math.max((v / sparkMax * 36), 2);
         return `<div class="bar" style="height:${h}px;background:${storeInfo.color};opacity:0.7"></div>`;
