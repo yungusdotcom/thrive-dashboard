@@ -57,6 +57,8 @@ async function getLocations() {
   const data = await flowhubGet('/v0/clientsLocations');
   const raw  = Array.isArray(data) ? data : (data.locations || data.data || []);
 
+  if (raw.length > 0) console.log('RAW LOCATION SAMPLE:', JSON.stringify(raw[0], null, 2));
+
   _locations = raw
     .filter(loc => !EXCLUDED_STORES.some(ex =>
       (loc.name || '').toLowerCase().includes(ex.toLowerCase())
@@ -66,15 +68,16 @@ async function getLocations() {
         (loc.name || '').toLowerCase().includes(s.name.toLowerCase()) ||
         s.name.toLowerCase().includes((loc.name || '').toLowerCase())
       );
+      const importId = loc.importId || loc.import_id || loc._id || loc.id || loc.locationId || loc.location_id;
       return {
-        importId: loc.importId || loc._id || loc.id,
-        name:     loc.name,
-        id:       cfg?.id    || (loc.name || '').toLowerCase().replace(/\s+/g, '_'),
-        color:    cfg?.color || '#888888',
+        importId,
+        name:  loc.name,
+        id:    cfg?.id    || (loc.name || '').toLowerCase().replace(/\s+/g, '_'),
+        color: cfg?.color || '#888888',
       };
     });
 
-  console.log(`✓ ${_locations.length} locations:`, _locations.map(l => `${l.name}(${l.importId})`).join(', '));
+  console.log('✓', _locations.length, 'locations:', _locations.map(l => l.name + '(' + l.importId + ')').join(', '));
   return _locations;
 }
 
