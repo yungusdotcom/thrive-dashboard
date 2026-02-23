@@ -311,49 +311,73 @@ function extractTopProducts(orders, limit = 15) {
     .slice(0, limit);
 }
 
-// ── All stores in parallel ────────────────────────────────────
+// ── All stores — sequential to avoid rate limiting ────────────
 async function getAllStoresSales(startDate, endDate) {
   const locations = await getLocations();
-  const results = await Promise.allSettled(
-    locations.map(async loc => {
+  const results = [];
+  for (const loc of locations) {
+    try {
       const { orders } = await getOrdersForLocation(loc.importId, startDate, endDate);
-      return { store: loc, summary: summarizeOrders(orders), orders };
-    })
-  );
-  return results.map((r, i) => ({
-    store: locations[i],
-    summary: r.status === 'fulfilled' ? r.value.summary : null,
-    orders:  r.status === 'fulfilled' ? r.value.orders  : [],
-    error:   r.status === 'rejected'  ? r.reason?.message : null,
-  }));
+      results.push({ store: loc, summary: summarizeOrders(orders), orders });
+    } catch (err) {
+      console.error(`getAllStoresSales error for ${loc.name}:`, err.message);
+      results.push({ store: loc, summary: null, orders: [], error: err.message });
+    }
+  }
+  return results;
 }
 
-// ── Weekly trend ──────────────────────────────────────────────
+// ── Weekly trend — sequential per store, 3 weeks at a time ───
 async function getWeeklyTrend(importId, weeksBack = 12) {
   const weeks = Array.from({ length: weeksBack }, (_, i) => weekRange(weeksBack - 1 - i));
-  const results = await Promise.allSettled(
-    weeks.map(async w => {
-      const { orders } = await getOrdersForLocation(importId, w.start, w.end);
-      return { week: w, summary: summarizeOrders(orders) };
-    })
-  );
-  return results.map((r, i) => ({
-    week:    weeks[i],
-    summary: r.status === 'fulfilled' ? r.value.summary : null,
-    error:   r.status === 'rejected'  ? r.reason?.message : null,
-  }));
+  const results = [];
+
+  // Process 3 weeks at a time to stay within rate limits
+  for (let i = 0; i < weeks.length; i += 3) {
+    const batch = weeks.slice(i, i + 3);
+    const batchResults = await Promise.allSettled(
+      batch.map(async w => {
+        const { orders } = await getOrdersForLocation(importId, w.start, w.end);
+        return { week: w, summary: summarizeOrders(orders) };
+      })
+    );
+    for (let j = 0; j < batchResults.length; j++) {
+      const r = batchResults[j];
+      results.push({
+        week: batch[j],
+        summary: r.status === 'fulfilled' ? r.value.summary : null,
+        error: r.status === 'rejected' ? r.reason?.message : null,
+      });
+      if (r.status === 'rejected') {
+        console.error(`Trend error week ${batch[j].start}: ${r.reason?.message}`);
+      }
+    }
+    // Small delay between batches
+    if (i + 3 < weeks.length) await sleep(200);
+  }
+
+  return results;
 }
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 async function getAllStoresWeeklyTrend(weeksBack = 12) {
   const locations = await getLocations();
-  const results = await Promise.allSettled(
-    locations.map(loc => getWeeklyTrend(loc.importId, weeksBack))
-  );
-  return results.map((r, i) => ({
-    store: locations[i],
-    trend: r.status === 'fulfilled' ? r.value : [],
-    error: r.status === 'rejected'  ? r.reason?.message : null,
-  }));
+  const results = [];
+
+  // Process one store at a time (sequential)
+  for (const loc of locations) {
+    try {
+      console.log(`  Fetching trend: ${loc.name}...`);
+      const trend = await getWeeklyTrend(loc.importId, weeksBack);
+      results.push({ store: loc, trend });
+    } catch (err) {
+      console.error(`Trend failed for ${loc.name}:`, err.message);
+      results.push({ store: loc, trend: [], error: err.message });
+    }
+  }
+
+  return results;
 }
 
 // ── Full dashboard payload ────────────────────────────────────
@@ -362,11 +386,13 @@ async function getDashboardData() {
   const lw = weekRange(1);
   const td = todayRange();
 
-  const [thisWeek, lastWeek, todayData] = await Promise.all([
-    getAllStoresSales(tw.start, tw.end),
-    getAllStoresSales(lw.start, lw.end),
-    getAllStoresSales(td.start, td.end),
-  ]);
+  // Sequential to avoid rate limiting
+  console.log('Fetching today...');
+  const todayData = await getAllStoresSales(td.start, td.end);
+  console.log('Fetching this week...');
+  const thisWeek = await getAllStoresSales(tw.start, tw.end);
+  console.log('Fetching last week...');
+  const lastWeek = await getAllStoresSales(lw.start, lw.end);
 
   const locations = await getLocations();
 
