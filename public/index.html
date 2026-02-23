@@ -509,27 +509,40 @@ function renderRankings(storeData) {
           const maxVal = byRev[0]?.thisWeek?.net_sales || 1;
           const pct = (val / maxVal * 100).toFixed(0);
           const color = stores.find(s => s.id === st.id)?.color || '#888';
-          return `<div style="display:flex;align-items:center;gap:12px;margin-bottom:8px;">
-            <span style="font-family:var(--mono);font-size:10px;color:var(--muted);width:16px;">${i+1}</span>
-            <span style="font-weight:600;font-size:13px;width:100px;">${st.name}</span>
-            <div style="flex:1;height:20px;background:var(--surface);border-radius:2px;overflow:hidden;">
+          return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+            <span style="font-weight:600;font-size:12px;width:80px;white-space:nowrap;">${st.name}</span>
+            <div style="flex:1;height:24px;background:var(--surface);border-radius:2px;overflow:hidden;position:relative;">
               <div style="height:100%;width:${pct}%;background:${color};border-radius:2px;transition:width .5s;"></div>
+              <span style="position:absolute;top:50%;left:8px;transform:translateY(-50%);font-family:var(--mono);font-size:11px;font-weight:700;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,0.5);">${fmtK(val)}</span>
             </div>
-            <span style="font-family:var(--mono);font-size:12px;font-weight:700;width:70px;text-align:right;">${fmtK(val)}</span>
           </div>`;
         }).join('')}
       </div>
       <div class="chart-container">
         <div class="chart-header"><h3>WoW MOMENTUM (COMPLETED WEEKS)</h3></div>
-        ${byMom.map((st, i) => {
-          const color = stores.find(s => s.id === st.id)?.color || '#888';
-          return `<div style="display:flex;align-items:center;gap:12px;margin-bottom:8px;">
-            <span style="font-family:var(--mono);font-size:10px;color:var(--muted);width:16px;">${i+1}</span>
-            <span style="font-weight:600;font-size:13px;width:100px;">${st.name}</span>
-            <span style="font-family:var(--mono);font-size:12px;font-weight:600;color:${st.wow != null && st.wow >= 0 ? 'var(--green)' : 'var(--red)'}">${pctFmt(st.wow)}</span>
-            <span style="font-family:var(--mono);font-size:11px;color:var(--muted);margin-left:auto;">${fmtK(st.lwSales)}</span>
-          </div>`;
-        }).join('')}
+        ${(() => {
+          const maxAbs = Math.max(...byMom.map(st => Math.abs(st.wow || 0)), 1);
+          return byMom.map((st, i) => {
+            const color = stores.find(s => s.id === st.id)?.color || '#888';
+            const wow = st.wow || 0;
+            const barWidth = Math.min(Math.abs(wow) / maxAbs * 45, 45);
+            const isPos = wow >= 0;
+            return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;height:24px;">
+              <span style="font-weight:600;font-size:12px;width:80px;white-space:nowrap;">${st.name}</span>
+              <div style="flex:1;display:flex;align-items:center;height:100%;">
+                <div style="width:45%;display:flex;justify-content:flex-end;">
+                  ${!isPos ? `<div style="height:20px;width:${barWidth}%;background:var(--red);border-radius:2px 0 0 2px;"></div>` : ''}
+                </div>
+                <div style="width:2px;height:100%;background:var(--border);flex-shrink:0;"></div>
+                <div style="width:45%;display:flex;justify-content:flex-start;">
+                  ${isPos ? `<div style="height:20px;width:${barWidth}%;background:var(--green);border-radius:0 2px 2px 0;"></div>` : ''}
+                </div>
+              </div>
+              <span style="font-family:var(--mono);font-size:12px;font-weight:700;width:52px;text-align:right;color:${isPos ? 'var(--green)' : 'var(--red)'}">${pctFmt(wow)}</span>
+              <span style="font-family:var(--mono);font-size:10px;color:var(--muted);width:85px;text-align:right;">${fmtK(st.lwSales)}</span>
+            </div>`;
+          }).join('');
+        })()}
       </div>
     </div>
   `;
