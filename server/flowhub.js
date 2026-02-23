@@ -119,63 +119,79 @@ function ytdRange() {
 let _schemaLogged = false;
 
 async function getOrdersForLocation(importId, startDate, endDate) {
-  const PAGE_SIZE = 10000;
-  let page = 1;
-  let allOrders = [];
-  let total = 0;
-
   // Flowhub requires yyyy-mm-dd format
   const start = startDate.split('T')[0];
   const end   = endDate.split('T')[0];
 
-  while (true) {
-    const data = await flowhubGet(`/v1/orders/findByLocationId/${importId}`, {
-      created_after:  start,
-      created_before: end,
-      page_size:      PAGE_SIZE,
-      page,
-      order_by:       'asc',
-    });
+  // Try with smaller page size first (Flowhub 500s on large page_size for older dates)
+  const pageSizes = [2000, 500];
+  let lastError = null;
 
-    const batch = data.orders || [];
-    total = data.total || 0;
-    allOrders = allOrders.concat(batch);
+  for (const PAGE_SIZE of pageSizes) {
+    try {
+      let page = 1;
+      let allOrders = [];
+      let total = 0;
 
-    // Log every query result for first few calls so we can debug
-    if (total === 0) {
-      console.log(`⚠ 0 orders: location=${importId.slice(0,8)} range=${start}→${end}`);
-    }
+      while (true) {
+        const data = await flowhubGet(`/v1/orders/findByLocationId/${importId}`, {
+          created_after:  start,
+          created_before: end,
+          page_size:      PAGE_SIZE,
+          page,
+          order_by:       'asc',
+        });
 
-    // Log the schema of the first order + first item ONCE so we can see real field names
-    if (!_schemaLogged && batch.length > 0) {
-      _schemaLogged = true;
-      const sample = batch[0];
-      console.log('\n═══ ORDER SCHEMA DISCOVERY ═══');
-      console.log('ORDER KEYS:', Object.keys(sample).join(', '));
+        const batch = data.orders || [];
+        total = data.total || 0;
+        allOrders = allOrders.concat(batch);
 
-      // Log all top-level fields with their values (truncated)
-      for (const [k, v] of Object.entries(sample)) {
-        if (k === 'itemsInCart') continue;
-        const val = typeof v === 'object' ? JSON.stringify(v) : String(v);
-        console.log(`  ${k}: ${val.slice(0, 120)}`);
-      }
-
-      if (sample.itemsInCart && sample.itemsInCart.length > 0) {
-        const item = sample.itemsInCart[0];
-        console.log('\nITEM KEYS:', Object.keys(item).join(', '));
-        for (const [k, v] of Object.entries(item)) {
-          const val = typeof v === 'object' ? JSON.stringify(v) : String(v);
-          console.log(`  ${k}: ${val.slice(0, 200)}`);
+        // Log schema once
+        if (!_schemaLogged && batch.length > 0) {
+          _schemaLogged = true;
+          const sample = batch[0];
+          console.log('\n═══ ORDER SCHEMA DISCOVERY ═══');
+          console.log('ORDER KEYS:', Object.keys(sample).join(', '));
+          for (const [k, v] of Object.entries(sample)) {
+            if (k === 'itemsInCart') continue;
+            const val = typeof v === 'object' ? JSON.stringify(v) : String(v);
+            console.log(`  ${k}: ${val.slice(0, 120)}`);
+          }
+          if (sample.itemsInCart && sample.itemsInCart.length > 0) {
+            const item = sample.itemsInCart[0];
+            console.log('\nITEM KEYS:', Object.keys(item).join(', '));
+            for (const [k, v] of Object.entries(item)) {
+              const val = typeof v === 'object' ? JSON.stringify(v) : String(v);
+              console.log(`  ${k}: ${val.slice(0, 200)}`);
+            }
+          }
+          console.log('═══ END SCHEMA ═══\n');
         }
-      }
-      console.log('═══ END SCHEMA ═══\n');
-    }
 
-    if (allOrders.length >= total || batch.length < PAGE_SIZE) break;
-    page++;
+        if (allOrders.length >= total || batch.length < PAGE_SIZE) break;
+        page++;
+        await sleep(100); // small delay between pages
+      }
+
+      if (total === 0) {
+        console.log(`⚠ 0 orders: location=${importId.slice(0,8)} range=${start}→${end}`);
+      }
+
+      return { total, orders: allOrders };
+    } catch (err) {
+      lastError = err;
+      if (err.message.includes('500')) {
+        console.log(`⚠ 500 error with page_size=${PAGE_SIZE} for ${importId.slice(0,8)} ${start}→${end}, retrying smaller...`);
+        await sleep(300);
+        continue; // try next smaller page size
+      }
+      throw err; // non-500 errors bubble up immediately
+    }
   }
 
-  return { total, orders: allOrders };
+  // All page sizes failed
+  console.error(`✗ All retries failed for ${importId.slice(0,8)} ${start}→${end}: ${lastError?.message}`);
+  return { total: 0, orders: [] };
 }
 
 // ── Summarize orders → KPIs ───────────────────────────────────
