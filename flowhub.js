@@ -1,30 +1,30 @@
 // server/flowhub.js
 // ============================================================
-// Flowhub API Client
-// Auth: key + clientId as headers on every request (no OAuth)
+// Flowhub API Client — Thrive Cannabis Marketplace
+// Auth: key + clientId headers (no OAuth)
 // Base: https://api.flowhub.co
 // ============================================================
 
 const fetch = require('node-fetch');
 
-const BASE       = 'https://api.flowhub.co';
+const BASE   = 'https://api.flowhub.co';
 const CLIENT_ID  = process.env.FLOWHUB_CLIENT_ID;
 const CLIENT_KEY = process.env.FLOWHUB_API_KEY;
 
-// Store color/id config
+// ── Store display config ──────────────────────────────────────
 const STORE_CONFIG = [
-  { id: 'cactus',   name: 'Cactus',      color: '#00e5a0' },
-  { id: 'cheyenne', name: 'Cheyenne',    color: '#4db8ff' },
-  { id: 'jackpot',  name: 'Jackpot',     color: '#c084fc' },
-  { id: 'main',     name: 'Main Street', color: '#ffd166' },
-  { id: 'reno',     name: 'Reno',        color: '#ff8c42' },
-  { id: 'sahara',   name: 'Sahara',      color: '#ff4d6d' },
-  { id: 'sammy',    name: 'Sammy',       color: '#a8e6cf' },
+  { id: 'cactus',   match: 'cactus',      display: 'Cactus',      color: '#00e5a0' },
+  { id: 'cheyenne', match: 'cheyenne',    display: 'Cheyenne',    color: '#4db8ff' },
+  { id: 'jackpot',  match: 'jackpot',     display: 'Jackpot',     color: '#c084fc' },
+  { id: 'main',     match: 'main street', display: 'Main Street', color: '#ffd166' },
+  { id: 'reno',     match: 'reno',        display: 'Reno',        color: '#ff8c42' },
+  { id: 'sahara',   match: 'sahara',      display: 'Sahara',      color: '#ff4d6d' },
+  { id: 'sammy',    match: 'sammy',       display: 'Sammy',       color: '#a8e6cf' },
 ];
 
-const EXCLUDED_STORES = ['Smoke & Mirrors', 'MBNV', 'Cultivation', 'RC078'];
+const EXCLUDED_KEYWORDS = ['smoke', 'mirrors', 'mbnv', 'cultivation'];
 
-// ── Core GET — key + clientId as headers ─────────────────────
+// ── Core GET ──────────────────────────────────────────────────
 async function flowhubGet(path, params = {}) {
   const url = new URL(`${BASE}${path}`);
   Object.entries(params).forEach(([k, v]) => {
@@ -42,49 +42,57 @@ async function flowhubGet(path, params = {}) {
 
   if (!res.ok) {
     const body = await res.text().catch(() => '');
-    throw new Error(`Flowhub ${res.status} ${path}: ${body.slice(0, 300)}`);
+    throw new Error(`Flowhub ${res.status} ${path}: ${body.slice(0, 500)}`);
   }
-
   return res.json();
 }
 
-// ── Locations (cached) ───────────────────────────────────────
+// ── Locations ─────────────────────────────────────────────────
 let _locations = null;
 
 async function getLocations() {
   if (_locations) return _locations;
 
   const data = await flowhubGet('/v0/clientsLocations');
-  const raw  = Array.isArray(data) ? data : (data.locations || data.data || []);
+  const raw = Array.isArray(data) ? data : (data.locations || data.data || []);
 
-  if (raw.length > 0) console.log('RAW LOCATION SAMPLE:', JSON.stringify(raw[0], null, 2));
+  if (raw.length > 0) {
+    console.log('RAW LOCATION KEYS:', Object.keys(raw[0]).join(', '));
+  }
 
   _locations = raw
-    .filter(loc => !EXCLUDED_STORES.some(ex =>
-      (loc.locationName || loc.name || '').toLowerCase().includes(ex.toLowerCase())
-    ))
+    .filter(loc => {
+      const rawName = (loc.locationName || loc.name || '').toLowerCase();
+      return !EXCLUDED_KEYWORDS.some(ex => rawName.includes(ex));
+    })
     .map(loc => {
-      const locName = (loc.locationName || loc.name || '').toLowerCase();
-      const cfg = STORE_CONFIG.find(s =>
-        locName.includes(s.name.toLowerCase()) ||
-        s.name.toLowerCase().includes(locName)
-      );
+      const rawName = loc.locationName || loc.name || '';
       const importId = loc.importId || loc.locationId || loc._id || loc.id;
-      const name = loc.locationName || loc.name || '';
+
+      // Match to our config
+      const cfg = STORE_CONFIG.find(s =>
+        rawName.toLowerCase().includes(s.match)
+      );
+
       return {
         importId,
-        name,
-        id:    cfg?.id    || name.toLowerCase().replace(/\s+/g, '_'),
-        color: cfg?.color || '#888888',
+        rawName,
+        name:  cfg?.display || rawName,
+        id:    cfg?.id || rawName.toLowerCase().replace(/[^a-z]+/g, '_'),
+        color: cfg?.color || '#888',
       };
     });
 
-  console.log('✓', _locations.length, 'locations:', _locations.map(l => l.name + '(' + l.importId + ')').join(', '));
+  console.log('✓', _locations.length, 'locations:',
+    _locations.map(l => `${l.name}(${l.importId})`).join(', '));
+
   return _locations;
 }
 
-// ── Date helpers ─────────────────────────────────────────────
-function toDateStr(d) { return d.toISOString().split('T')[0]; }
+// ── Date helpers ──────────────────────────────────────────────
+function toDateStr(d) {
+  return d.toISOString().split('T')[0];
+}
 
 function weekRange(weeksBack = 0) {
   const now = new Date();
@@ -107,25 +115,61 @@ function ytdRange() {
   return { start: `${new Date().getFullYear()}-01-01`, end: toDateStr(new Date()) };
 }
 
-// ── Fetch ALL orders for a location ──────────────────────────
+// ── Fetch orders ──────────────────────────────────────────────
+let _schemaLogged = false;
+
 async function getOrdersForLocation(importId, startDate, endDate) {
   const PAGE_SIZE = 10000;
-  let page      = 1;
+  let page = 1;
   let allOrders = [];
-  let total     = 0;
+  let total = 0;
+
+  // Flowhub requires yyyy-mm-dd format
+  const start = startDate.split('T')[0];
+  const end   = endDate.split('T')[0];
 
   while (true) {
     const data = await flowhubGet(`/v1/orders/findByLocationId/${importId}`, {
-      created_after:  startDate,
-      created_before: endDate,
+      created_after:  start,
+      created_before: end,
       page_size:      PAGE_SIZE,
       page,
       order_by:       'asc',
     });
 
     const batch = data.orders || [];
-    total       = data.total  || 0;
-    allOrders   = allOrders.concat(batch);
+    total = data.total || 0;
+    allOrders = allOrders.concat(batch);
+
+    // Log every query result for first few calls so we can debug
+    if (total === 0) {
+      console.log(`⚠ 0 orders: location=${importId.slice(0,8)} range=${start}→${end}`);
+    }
+
+    // Log the schema of the first order + first item ONCE so we can see real field names
+    if (!_schemaLogged && batch.length > 0) {
+      _schemaLogged = true;
+      const sample = batch[0];
+      console.log('\n═══ ORDER SCHEMA DISCOVERY ═══');
+      console.log('ORDER KEYS:', Object.keys(sample).join(', '));
+
+      // Log all top-level fields with their values (truncated)
+      for (const [k, v] of Object.entries(sample)) {
+        if (k === 'itemsInCart') continue;
+        const val = typeof v === 'object' ? JSON.stringify(v) : String(v);
+        console.log(`  ${k}: ${val.slice(0, 120)}`);
+      }
+
+      if (sample.itemsInCart && sample.itemsInCart.length > 0) {
+        const item = sample.itemsInCart[0];
+        console.log('\nITEM KEYS:', Object.keys(item).join(', '));
+        for (const [k, v] of Object.entries(item)) {
+          const val = typeof v === 'object' ? JSON.stringify(v) : String(v);
+          console.log(`  ${k}: ${val.slice(0, 200)}`);
+        }
+      }
+      console.log('═══ END SCHEMA ═══\n');
+    }
 
     if (allOrders.length >= total || batch.length < PAGE_SIZE) break;
     page++;
@@ -134,163 +178,229 @@ async function getOrdersForLocation(importId, startDate, endDate) {
   return { total, orders: allOrders };
 }
 
-// ── Summarize raw orders into KPIs ───────────────────────────
+// ── Summarize orders → KPIs ───────────────────────────────────
+// Flowhub schema (confirmed from live API):
+//   Order: { budtender, customerType, orderStatus, totals: { finalTotal, subTotal, totalDiscounts, totalFees, totalTaxes } }
+//   Item:  { totalPrice (gross), totalDiscounts (flat number), totalCost, unitPrice, quantity, category, brand, productName, type }
+//   Pre-tax net sales per item = totalPrice - totalDiscounts
 function summarizeOrders(orders) {
   if (!orders || !orders.length) {
     return {
       transaction_count: 0, net_sales: 0, gross_sales: 0,
       avg_basket: 0, total_items: 0,
-      categories: [], budtenders: [], customer_types: { rec: 0, med: 0 },
+      categories: [], budtenders: [],
+      customer_types: { rec: 0, med: 0 },
     };
   }
 
-  let net_sales   = 0;
+  let net_sales = 0;
   let gross_sales = 0;
   let total_items = 0;
   const catMap = {};
-  const btMap  = {};
+  const btMap = {};
   const ctypes = { rec: 0, med: 0 };
 
   orders.forEach(order => {
+    // Skip voided orders
+    if (order.voided === true || order.orderStatus === 'voided') return;
+
+    // Customer type
     const ctype = (order.customerType || '').toLowerCase();
     if (ctype.includes('med')) ctypes.med++;
     else ctypes.rec++;
 
-    const bt = order.budtender || order.fulfilledBy || order.fullName || 'Unknown';
+    // Budtender
+    const bt = order.budtender || 'Unknown';
     if (!btMap[bt]) btMap[bt] = { name: bt, transactions: 0, net_sales: 0, items: 0 };
     btMap[bt].transactions++;
 
+    let orderNet = 0;
+    let orderGross = 0;
+    let orderItems = 0;
+
+    // Iterate items — use item-level totalPrice and totalDiscounts
     (order.itemsInCart || []).forEach(item => {
-      total_items++;
-      const qty      = item.quantity  || 1;
-      const price    = item.price     || item.unitPrice  || 0;
-      const lineGross = item.lineTotal || item.totalPrice || (price * qty);
-      const discount  = (item.itemDiscounts || []).reduce((s, d) => s + (d.discountAmount || 0), 0);
-      const lineNet   = lineGross - discount;
+      if (item.voided === true) return;
 
-      net_sales   += lineNet;
-      gross_sales += lineGross;
-      btMap[bt].net_sales += lineNet;
-      btMap[bt].items     += qty;
+      const qty = item.quantity || 1;
+      orderItems += qty;
 
-      const cat = item.category || item.productType || 'Other';
+      // Gross = totalPrice (this is unitPrice × quantity, before discounts)
+      const lineGross = Number(item.totalPrice) || (Number(item.unitPrice || 0) * qty);
+
+      // Discount = totalDiscounts (flat number on item, NOT an array)
+      const discount = Number(item.totalDiscounts) || 0;
+
+      // Net = gross - discounts (pre-tax)
+      const lineNet = lineGross - discount;
+
+      orderGross += lineGross;
+      orderNet += lineNet;
+
+      // Category breakdown
+      const cat = item.category || item.type || 'Other';
       if (!catMap[cat]) catMap[cat] = { name: cat, net_sales: 0, units: 0, transactions: 0 };
-      catMap[cat].net_sales    += lineNet;
-      catMap[cat].units        += qty;
+      catMap[cat].net_sales += lineNet;
+      catMap[cat].units += qty;
       catMap[cat].transactions++;
     });
+
+    net_sales += orderNet;
+    gross_sales += orderGross;
+    total_items += orderItems;
+    btMap[bt].net_sales += orderNet;
+    btMap[bt].items += orderItems;
   });
 
-  const txnCount  = orders.length;
+  const txnCount = orders.length;
   const avgBasket = txnCount > 0 ? net_sales / txnCount : 0;
 
   return {
     transaction_count: txnCount,
-    net_sales:         round2(net_sales),
-    gross_sales:       round2(gross_sales),
-    avg_basket:        round2(avgBasket),
+    net_sales:   round2(net_sales),
+    gross_sales: round2(gross_sales),
+    avg_basket:  round2(avgBasket),
     total_items,
     customer_types: ctypes,
-    categories: Object.values(catMap).sort((a, b) => b.net_sales - a.net_sales),
-    budtenders:  Object.values(btMap)
-      .map(b => ({ ...b, avg_basket: round2(b.transactions ? b.net_sales / b.transactions : 0) }))
+    categories: Object.values(catMap).sort((a, b) => b.net_sales - a.net_sales)
+      .map(c => ({ ...c, net_sales: round2(c.net_sales) })),
+    budtenders: Object.values(btMap)
+      .map(b => ({
+        ...b,
+        net_sales: round2(b.net_sales),
+        avg_basket: round2(b.transactions ? b.net_sales / b.transactions : 0),
+      }))
       .sort((a, b) => b.net_sales - a.net_sales),
   };
 }
 
 function round2(n) { return Math.round(n * 100) / 100; }
 
-// ── Top products ─────────────────────────────────────────────
+// ── Top products ──────────────────────────────────────────────
 function extractTopProducts(orders, limit = 15) {
   const map = {};
   orders.forEach(order => {
+    if (order.voided === true) return;
     (order.itemsInCart || []).forEach(item => {
-      const name  = item.name     || item.productName || 'Unknown';
-      const brand = item.brand    || item.brandName   || '';
-      const cat   = item.category || 'Other';
+      if (item.voided === true) return;
+      const name  = item.productName || item.title1 || 'Unknown';
+      const brand = item.brand || '';
+      const cat   = item.category || item.type || 'Other';
       const qty   = item.quantity || 1;
-      const price = item.price    || item.unitPrice   || 0;
-      const gross = item.lineTotal || (price * qty);
-      const disc  = (item.itemDiscounts || []).reduce((s, d) => s + (d.discountAmount || 0), 0);
-      const key   = `${name}__${brand}`;
+      const gross = Number(item.totalPrice) || 0;
+      const disc  = Number(item.totalDiscounts) || 0;
+      const net   = gross - disc;
 
-      if (!map[key]) map[key] = { name, brand, category: cat, units_sold: 0, net_sales: 0, prices: [] };
+      const key = `${name}__${brand}`;
+      if (!map[key]) map[key] = { name, brand, category: cat, units_sold: 0, net_sales: 0, gross_sales: 0, prices: [] };
       map[key].units_sold += qty;
-      map[key].net_sales  += gross - disc;
-      if (price) map[key].prices.push(price);
+      map[key].net_sales += net;
+      map[key].gross_sales += gross;
+      if (item.unitPrice) map[key].prices.push(Number(item.unitPrice));
     });
   });
 
   return Object.values(map)
     .map(p => ({
       name: p.name, brand: p.brand, category: p.category,
-      units_sold: p.units_sold, net_sales: round2(p.net_sales),
-      avg_price: p.prices.length ? round2(p.prices.reduce((a,b)=>a+b,0)/p.prices.length) : 0,
+      units_sold: p.units_sold,
+      net_sales: round2(p.net_sales),
+      avg_price: p.prices.length ? round2(p.prices.reduce((a, b) => a + b, 0) / p.prices.length) : 0,
     }))
     .sort((a, b) => b.net_sales - a.net_sales)
     .slice(0, limit);
 }
 
-// ── All stores in parallel ────────────────────────────────────
+// ── All stores — sequential to avoid rate limiting ────────────
 async function getAllStoresSales(startDate, endDate) {
   const locations = await getLocations();
-  const results = await Promise.allSettled(
-    locations.map(async loc => {
+  const results = [];
+  for (const loc of locations) {
+    try {
       const { orders } = await getOrdersForLocation(loc.importId, startDate, endDate);
-      return { store: loc, summary: summarizeOrders(orders), orders };
-    })
-  );
-  return results.map((r, i) => ({
-    store:   locations[i],
-    summary: r.status === 'fulfilled' ? r.value.summary : null,
-    orders:  r.status === 'fulfilled' ? r.value.orders  : [],
-    error:   r.status === 'rejected'  ? r.reason?.message : null,
-  }));
+      results.push({ store: loc, summary: summarizeOrders(orders), orders });
+    } catch (err) {
+      console.error(`getAllStoresSales error for ${loc.name}:`, err.message);
+      results.push({ store: loc, summary: null, orders: [], error: err.message });
+    }
+  }
+  return results;
 }
 
-// ── Weekly trend ─────────────────────────────────────────────
+// ── Weekly trend — sequential per store, 3 weeks at a time ───
 async function getWeeklyTrend(importId, weeksBack = 12) {
   const weeks = Array.from({ length: weeksBack }, (_, i) => weekRange(weeksBack - 1 - i));
-  const results = await Promise.allSettled(
-    weeks.map(async w => {
-      const { orders } = await getOrdersForLocation(importId, w.start, w.end);
-      return { week: w, summary: summarizeOrders(orders) };
-    })
-  );
-  return results.map((r, i) => ({
-    week:    weeks[i],
-    summary: r.status === 'fulfilled' ? r.value.summary : null,
-    error:   r.status === 'rejected'  ? r.reason?.message : null,
-  }));
+  const results = [];
+
+  // Process 3 weeks at a time to stay within rate limits
+  for (let i = 0; i < weeks.length; i += 3) {
+    const batch = weeks.slice(i, i + 3);
+    const batchResults = await Promise.allSettled(
+      batch.map(async w => {
+        const { orders } = await getOrdersForLocation(importId, w.start, w.end);
+        return { week: w, summary: summarizeOrders(orders) };
+      })
+    );
+    for (let j = 0; j < batchResults.length; j++) {
+      const r = batchResults[j];
+      results.push({
+        week: batch[j],
+        summary: r.status === 'fulfilled' ? r.value.summary : null,
+        error: r.status === 'rejected' ? r.reason?.message : null,
+      });
+      if (r.status === 'rejected') {
+        console.error(`Trend error week ${batch[j].start}: ${r.reason?.message}`);
+      }
+    }
+    // Small delay between batches
+    if (i + 3 < weeks.length) await sleep(200);
+  }
+
+  return results;
 }
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 async function getAllStoresWeeklyTrend(weeksBack = 12) {
   const locations = await getLocations();
-  const results = await Promise.allSettled(
-    locations.map(loc => getWeeklyTrend(loc.importId, weeksBack))
-  );
-  return results.map((r, i) => ({
-    store: locations[i],
-    trend: r.status === 'fulfilled' ? r.value : [],
-    error: r.status === 'rejected'  ? r.reason?.message : null,
-  }));
+  const results = [];
+
+  // Process one store at a time (sequential)
+  for (const loc of locations) {
+    try {
+      console.log(`  Fetching trend: ${loc.name}...`);
+      const trend = await getWeeklyTrend(loc.importId, weeksBack);
+      results.push({ store: loc, trend });
+    } catch (err) {
+      console.error(`Trend failed for ${loc.name}:`, err.message);
+      results.push({ store: loc, trend: [], error: err.message });
+    }
+  }
+
+  return results;
 }
 
-// ── Full dashboard ────────────────────────────────────────────
+// ── Full dashboard payload ────────────────────────────────────
 async function getDashboardData() {
   const tw = weekRange(0);
   const lw = weekRange(1);
   const td = todayRange();
 
-  const [thisWeek, lastWeek, todayData] = await Promise.all([
-    getAllStoresSales(tw.start, tw.end),
-    getAllStoresSales(lw.start, lw.end),
-    getAllStoresSales(td.start, td.end),
-  ]);
+  // Sequential to avoid rate limiting
+  console.log('Fetching today...');
+  const todayData = await getAllStoresSales(td.start, td.end);
+  console.log('Fetching this week...');
+  const thisWeek = await getAllStoresSales(tw.start, tw.end);
+  console.log('Fetching last week...');
+  const lastWeek = await getAllStoresSales(lw.start, lw.end);
 
   const locations = await getLocations();
+
   return {
-    meta: { fetchedAt: new Date().toISOString(), dateRanges: { thisWeek: tw, lastWeek: lw, today: td, ytd: ytdRange() } },
+    meta: {
+      fetchedAt: new Date().toISOString(),
+      dateRanges: { thisWeek: tw, lastWeek: lw, today: td, ytd: ytdRange() },
+    },
     stores: locations.map((loc, i) => ({
       ...loc,
       thisWeek: thisWeek[i]?.summary || null,
@@ -300,8 +410,114 @@ async function getDashboardData() {
   };
 }
 
+// ── Diagnostic: raw order sample ──────────────────────────────
+async function getRawOrderSample(importId) {
+  const td = todayRange();
+  const data = await flowhubGet(`/v1/orders/findByLocationId/${importId}`, {
+    created_after:  td.start,
+    created_before: td.end,
+    page_size:      3,
+    page:           1,
+  });
+  return {
+    total: data.total,
+    sample: (data.orders || []).slice(0, 2),
+  };
+}
+
+// ── Day vs Day: last N occurrences of each weekday ───────────
+// Returns data for a specific weekday (0=Sun..6=Sat) going back N weeks
+async function getDayVsDayData(weeksBack = 4) {
+  const locations = await getLocations();
+  const now = new Date();
+  const todayDow = now.getDay(); // 0=Sun, 1=Mon, ...6=Sat
+
+  // Build array of days to query: for each weekday, get the last `weeksBack` occurrences
+  const dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  const results = {};
+
+  for (let dow = 0; dow < 7; dow++) {
+    // Find the last `weeksBack` occurrences of this weekday
+    const dates = [];
+    for (let w = 0; w < weeksBack; w++) {
+      const d = new Date(now);
+      // How many days ago was the most recent occurrence of this dow?
+      let daysBack = (todayDow - dow + 7) % 7;
+      if (daysBack === 0 && dow !== todayDow) daysBack = 7; // if same dow but we want previous
+      if (dow === todayDow && w === 0) daysBack = 0; // today
+      else if (dow === todayDow) daysBack = w * 7; // previous same weekday
+      else daysBack = daysBack + (w * 7);
+
+      d.setDate(now.getDate() - daysBack);
+      dates.push(toDateStr(d));
+    }
+
+    // Only include days that are in the past or today
+    const validDates = dates.filter(dt => dt <= toDateStr(now));
+
+    // For each date, fetch all stores sequentially
+    const dayData = [];
+    for (const date of validDates) {
+      console.log(`  Day vs Day: ${dayNames[dow]} ${date}...`);
+      const storeResults = [];
+      for (const loc of locations) {
+        try {
+          const { orders } = await getOrdersForLocation(loc.importId, date, date);
+          storeResults.push({ store: loc, summary: summarizeOrders(orders) });
+        } catch (err) {
+          storeResults.push({ store: loc, summary: null, error: err.message });
+        }
+        await sleep(50); // small delay
+      }
+      dayData.push({ date, stores: storeResults });
+    }
+
+    results[dow] = { dayName: dayNames[dow], dates: dayData };
+  }
+
+  return results;
+}
+
+// Lighter version: just one specific weekday
+async function getSingleDayVsDay(dow, weeksBack = 4) {
+  const locations = await getLocations();
+  const now = new Date();
+  const todayDow = now.getDay();
+  const dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+
+  const dates = [];
+  for (let w = 0; w < weeksBack; w++) {
+    const d = new Date(now);
+    let daysBack = (todayDow - dow + 7) % 7;
+    if (daysBack === 0 && w > 0) daysBack = 7 * w;
+    else if (w > 0) daysBack += 7 * w;
+    d.setDate(now.getDate() - daysBack);
+    const ds = toDateStr(d);
+    if (ds <= toDateStr(now)) dates.push(ds);
+  }
+
+  const dayData = [];
+  for (const date of dates) {
+    console.log(`  Day vs Day: ${dayNames[dow]} ${date}...`);
+    const storeResults = [];
+    for (const loc of locations) {
+      try {
+        const { orders } = await getOrdersForLocation(loc.importId, date, date);
+        storeResults.push({ store: loc, summary: summarizeOrders(orders) });
+      } catch (err) {
+        storeResults.push({ store: loc, summary: null, error: err.message });
+      }
+      await sleep(50);
+    }
+    dayData.push({ date, stores: storeResults });
+  }
+
+  return { dow, dayName: dayNames[dow], dates: dayData };
+}
+
 module.exports = {
   getLocations, getOrdersForLocation, summarizeOrders, extractTopProducts,
   getAllStoresSales, getWeeklyTrend, getAllStoresWeeklyTrend, getDashboardData,
+  getRawOrderSample, getSingleDayVsDay,
   weekRange, todayRange, ytdRange, toDateStr, STORE_CONFIG,
 };
