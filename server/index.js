@@ -209,6 +209,20 @@ app.get('/api/employees', auth, async (req, res) => {
   }
 });
 
+// Day vs Day — compare same weekday across last N weeks
+// ?dow=1 (Monday) &weeks=4
+app.get('/api/day-vs-day', auth, async (req, res) => {
+  const dow = parseInt(req.query.dow ?? new Date().getDay());
+  const weeks = Math.min(parseInt(req.query.weeks) || 4, 8);
+  try {
+    const data = await cached(`dvd_${dow}_${weeks}`, 600, () => fh.getSingleDayVsDay(dow, weeks));
+    res.json(data);
+  } catch (err) {
+    console.error('Day vs Day error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Cache management
 app.post('/api/cache/clear', auth, (req, res) => {
   const count = cache.keys().length;

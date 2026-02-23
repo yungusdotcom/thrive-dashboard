@@ -425,9 +425,99 @@ async function getRawOrderSample(importId) {
   };
 }
 
+// ── Day vs Day: last N occurrences of each weekday ───────────
+// Returns data for a specific weekday (0=Sun..6=Sat) going back N weeks
+async function getDayVsDayData(weeksBack = 4) {
+  const locations = await getLocations();
+  const now = new Date();
+  const todayDow = now.getDay(); // 0=Sun, 1=Mon, ...6=Sat
+
+  // Build array of days to query: for each weekday, get the last `weeksBack` occurrences
+  const dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  const results = {};
+
+  for (let dow = 0; dow < 7; dow++) {
+    // Find the last `weeksBack` occurrences of this weekday
+    const dates = [];
+    for (let w = 0; w < weeksBack; w++) {
+      const d = new Date(now);
+      // How many days ago was the most recent occurrence of this dow?
+      let daysBack = (todayDow - dow + 7) % 7;
+      if (daysBack === 0 && dow !== todayDow) daysBack = 7; // if same dow but we want previous
+      if (dow === todayDow && w === 0) daysBack = 0; // today
+      else if (dow === todayDow) daysBack = w * 7; // previous same weekday
+      else daysBack = daysBack + (w * 7);
+
+      d.setDate(now.getDate() - daysBack);
+      dates.push(toDateStr(d));
+    }
+
+    // Only include days that are in the past or today
+    const validDates = dates.filter(dt => dt <= toDateStr(now));
+
+    // For each date, fetch all stores sequentially
+    const dayData = [];
+    for (const date of validDates) {
+      console.log(`  Day vs Day: ${dayNames[dow]} ${date}...`);
+      const storeResults = [];
+      for (const loc of locations) {
+        try {
+          const { orders } = await getOrdersForLocation(loc.importId, date, date);
+          storeResults.push({ store: loc, summary: summarizeOrders(orders) });
+        } catch (err) {
+          storeResults.push({ store: loc, summary: null, error: err.message });
+        }
+        await sleep(50); // small delay
+      }
+      dayData.push({ date, stores: storeResults });
+    }
+
+    results[dow] = { dayName: dayNames[dow], dates: dayData };
+  }
+
+  return results;
+}
+
+// Lighter version: just one specific weekday
+async function getSingleDayVsDay(dow, weeksBack = 4) {
+  const locations = await getLocations();
+  const now = new Date();
+  const todayDow = now.getDay();
+  const dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+
+  const dates = [];
+  for (let w = 0; w < weeksBack; w++) {
+    const d = new Date(now);
+    let daysBack = (todayDow - dow + 7) % 7;
+    if (daysBack === 0 && w > 0) daysBack = 7 * w;
+    else if (w > 0) daysBack += 7 * w;
+    d.setDate(now.getDate() - daysBack);
+    const ds = toDateStr(d);
+    if (ds <= toDateStr(now)) dates.push(ds);
+  }
+
+  const dayData = [];
+  for (const date of dates) {
+    console.log(`  Day vs Day: ${dayNames[dow]} ${date}...`);
+    const storeResults = [];
+    for (const loc of locations) {
+      try {
+        const { orders } = await getOrdersForLocation(loc.importId, date, date);
+        storeResults.push({ store: loc, summary: summarizeOrders(orders) });
+      } catch (err) {
+        storeResults.push({ store: loc, summary: null, error: err.message });
+      }
+      await sleep(50);
+    }
+    dayData.push({ date, stores: storeResults });
+  }
+
+  return { dow, dayName: dayNames[dow], dates: dayData };
+}
+
 module.exports = {
   getLocations, getOrdersForLocation, summarizeOrders, extractTopProducts,
   getAllStoresSales, getWeeklyTrend, getAllStoresWeeklyTrend, getDashboardData,
-  getRawOrderSample,
+  getRawOrderSample, getSingleDayVsDay,
   weekRange, todayRange, ytdRange, toDateStr, STORE_CONFIG,
 };

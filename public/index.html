@@ -183,6 +183,7 @@ header { display:flex; justify-content:space-between; align-items:flex-end; marg
   <div class="nav-tabs" id="navTabs">
     <button class="active" data-tab="executive">Executive</button>
     <button data-tab="heatmap">Heatmap</button>
+    <button data-tab="dayvday">Day vs Day</button>
     <button data-tab="stores">Stores</button>
     <button data-tab="velocity">Velocity</button>
     <button data-tab="budtenders">Budtenders</button>
@@ -207,6 +208,23 @@ header { display:flex; justify-content:space-between; align-items:flex-end; marg
     <div class="section-title"><span>◆</span> WEEK-OVER-WEEK HEATMAP — <span>NET SALES</span></div>
     <div class="heatmap-wrap" id="heatmapWrap">
       <div class="loading">LOADING HEATMAP</div>
+    </div>
+  </div>
+
+  <!-- TAB: DAY VS DAY -->
+  <div id="tab-dayvday" class="tab-content" style="display:none">
+    <div class="section-title"><span>◆</span> DAY VS DAY — SAME WEEKDAY COMPARISON</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:20px;" id="dowSelector">
+      <button class="refresh-btn" data-dow="1" style="min-width:50px">MON</button>
+      <button class="refresh-btn" data-dow="2" style="min-width:50px">TUE</button>
+      <button class="refresh-btn" data-dow="3" style="min-width:50px">WED</button>
+      <button class="refresh-btn" data-dow="4" style="min-width:50px">THU</button>
+      <button class="refresh-btn" data-dow="5" style="min-width:50px">FRI</button>
+      <button class="refresh-btn" data-dow="6" style="min-width:50px">SAT</button>
+      <button class="refresh-btn" data-dow="0" style="min-width:50px">SUN</button>
+    </div>
+    <div id="dvdContent">
+      <div class="loading">SELECT A DAY ABOVE</div>
     </div>
   </div>
 
@@ -333,6 +351,18 @@ function initDashboard() {
 
   // Build store selectors
   buildStoreSelectors();
+
+  // Day vs Day selector
+  document.querySelectorAll('#dowSelector button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#dowSelector button').forEach(b => {
+        b.style.background = 'var(--card)'; b.style.color = 'var(--muted)'; b.style.borderColor = 'var(--border)';
+      });
+      btn.style.background = 'var(--accent)'; btn.style.color = '#000'; btn.style.borderColor = 'var(--accent)';
+      loadDayVsDay(parseInt(btn.dataset.dow));
+    });
+  });
+
   loadDashboard();
   loadTrend();
 }
@@ -527,16 +557,25 @@ function renderTrendChart() {
 
   const maxVal = Math.max(...weeklyTotals.map(w => w.total), 1);
 
+  // Abbreviated format just for chart labels
+  const chartFmt = (v) => {
+    if (v >= 1000000) return '$' + (v/1000000).toFixed(1) + 'M';
+    if (v >= 1000) return '$' + (v/1000).toFixed(0) + 'K';
+    return '$' + Math.round(v);
+  };
+
   const bars = weeklyTotals.map((w, i) => {
-    const h = (w.total / maxVal * 160).toFixed(0);
+    const h = Math.max((w.total / maxVal * 180), 20).toFixed(0);
     const prev = i > 0 ? weeklyTotals[i-1].total : w.total;
     const change = pctChange(w.total, prev);
     const color = change != null && change >= 0 ? 'var(--accent)' : 'var(--red)';
     const label = w.week?.start?.slice(5) || '';
-    return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;">
-      <span style="font-family:var(--mono);font-size:9px;color:var(--muted);transform:rotate(-45deg);white-space:nowrap;">${fmtK(w.total)}</span>
-      <div style="width:80%;height:${h}px;background:${color};border-radius:2px 2px 0 0;transition:height .5s;opacity:${i === numWeeks-1 ? '0.5' : '1'}" title="${fmtK(w.total)}"></div>
-      <span style="font-family:var(--mono);font-size:9px;color:var(--muted)">${label}</span>
+    const isLast = i === numWeeks - 1;
+    return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:0;">
+      <div style="width:90%;height:${h}px;background:${color};border-radius:3px 3px 0 0;transition:height .5s;opacity:${isLast ? '0.5' : '1'};position:relative;min-height:20px;cursor:default;" title="${fmtK(w.total)} (${pctFmt(change)})">
+        <span style="position:absolute;top:4px;left:50%;transform:translateX(-50%);font-family:var(--mono);font-size:9px;font-weight:700;color:#000;white-space:nowrap;">${chartFmt(w.total)}</span>
+      </div>
+      <span style="font-family:var(--mono);font-size:9px;color:var(--muted);margin-top:4px;">${label}</span>
     </div>`;
   }).join('');
 
@@ -545,7 +584,7 @@ function renderTrendChart() {
       <h3>ALL STORES COMBINED — WEEKLY NET SALES</h3>
       <div style="font-family:var(--mono);font-size:10px;color:var(--muted);">${numWeeks} WEEKS</div>
     </div>
-    <div style="display:flex;align-items:end;height:200px;gap:4px;padding-top:20px;">${bars}</div>
+    <div style="display:flex;align-items:end;height:240px;gap:6px;padding-top:10px;">${bars}</div>
     <div style="font-family:var(--mono);font-size:9px;color:var(--muted);margin-top:8px;text-align:center;">
       Current week (rightmost) is partial — <span style="opacity:0.5">shown at 50% opacity</span>
     </div>
@@ -603,6 +642,130 @@ function heatColor(pct) {
   if (pct >= -5) return 'rgba(255,71,87,0.1)';
   if (pct >= -10) return 'rgba(255,71,87,0.22)';
   return 'rgba(255,71,87,0.35)';
+}
+
+// ═══════════════════════════════════════════════════════════════
+// DAY VS DAY TAB
+// ═══════════════════════════════════════════════════════════════
+let dvdCache = {};
+
+async function loadDayVsDay(dow) {
+  const el = document.getElementById('dvdContent');
+  if (dvdCache[dow]) { renderDayVsDay(dvdCache[dow]); return; }
+
+  el.innerHTML = '<div class="loading">LOADING — COMPARING LAST 4 ' + ['SUNDAYS','MONDAYS','TUESDAYS','WEDNESDAYS','THURSDAYS','FRIDAYS','SATURDAYS'][dow] + '</div>';
+
+  try {
+    const data = await api('/api/day-vs-day?dow=' + dow + '&weeks=4');
+    dvdCache[dow] = data;
+    renderDayVsDay(data);
+  } catch (e) {
+    el.innerHTML = '<div class="loading" style="color:var(--red)">ERROR: ' + e.message + '</div>';
+  }
+}
+
+function renderDayVsDay(data) {
+  const el = document.getElementById('dvdContent');
+  const dates = data.dates || [];
+  if (dates.length === 0) { el.innerHTML = '<div class="loading">NO DATA</div>'; return; }
+
+  // Format dates nicely
+  const fmtDate = (d) => {
+    const dt = new Date(d + 'T12:00:00');
+    return dt.toLocaleDateString('en-US', { month:'short', day:'numeric' });
+  };
+
+  // ── HEATMAP TABLE ──
+  let html = '<div class="section-title" style="margin-top:0"><span>◆</span> ' + data.dayName.toUpperCase() + ' — LAST ' + dates.length + ' WEEKS (NET SALES)</div>';
+  html += '<div class="heatmap-wrap"><table class="heatmap-table"><thead><tr><th>DATE</th>';
+  stores.forEach(s => { html += `<th>${s.name}</th>`; });
+  html += '<th>CO. TOTAL</th><th>vs PREV</th></tr></thead><tbody>';
+
+  dates.forEach((day, di) => {
+    html += `<tr><td style="font-weight:700">${fmtDate(day.date)}</td>`;
+    let dayTotal = 0;
+    let prevDayTotal = 0;
+
+    day.stores.forEach((st, si) => {
+      const val = st.summary?.net_sales || 0;
+      const prev = di < dates.length - 1 ? (dates[di + 1]?.stores[si]?.summary?.net_sales || 0) : null;
+      const change = prev != null ? pctChange(val, prev) : null;
+      dayTotal += val;
+      if (di < dates.length - 1) prevDayTotal += (dates[di + 1]?.stores[si]?.summary?.net_sales || 0);
+
+      const bg = heatColor(change);
+      html += `<td style="background:${bg}" title="${pctFmt(change)}">${fmtK(val)}</td>`;
+    });
+
+    const totalChange = di < dates.length - 1 ? pctChange(dayTotal, prevDayTotal) : null;
+    const totalBg = heatColor(totalChange);
+    html += `<td style="background:${totalBg};font-weight:700">${fmtK(dayTotal)}</td>`;
+    html += `<td style="font-weight:600;color:${totalChange != null && totalChange >= 0 ? 'var(--green)' : 'var(--red)'}">${pctFmt(totalChange)}</td>`;
+    html += '</tr>';
+  });
+
+  html += '</tbody></table></div>';
+
+  // ── PER-STORE COMPARISON CARDS ──
+  html += '<div class="section-title"><span>◆</span> STORE-BY-STORE — ' + data.dayName.toUpperCase() + ' TREND</div>';
+  html += '<div class="velocity-grid">';
+
+  stores.forEach((s, si) => {
+    const vals = dates.map(d => d.stores[si]?.summary?.net_sales || 0);
+    const txns = dates.map(d => d.stores[si]?.summary?.transaction_count || 0);
+    const avgSales = vals.length > 0 ? vals.reduce((a, b) => a + b, 0) / vals.length : 0;
+    const latest = vals[0] || 0;
+    const prev = vals[1] || 0;
+    const change = pctChange(latest, prev);
+    const maxVal = Math.max(...vals, 1);
+
+    html += `<div class="vel-card">
+      <div class="vname">
+        <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${s.color}"></span>
+        ${s.name}
+        <span class="vstatus ${pctClass(change)}" style="font-family:var(--mono);font-size:12px;font-weight:600">${pctFmt(change)}</span>
+      </div>
+      <div class="vrow"><span class="vl">MOST RECENT (${fmtDate(dates[0]?.date)})</span><span style="font-weight:700">${fmtK(latest)}</span></div>
+      <div class="vrow"><span class="vl">PREVIOUS (${dates[1] ? fmtDate(dates[1].date) : '—'})</span><span>${fmtK(prev)}</span></div>
+      <div class="vrow"><span class="vl">4-${data.dayName.toUpperCase()} AVG</span><span>${fmtK(avgSales)}</span></div>
+      <div class="sparkline">${vals.reverse().map(v => {
+        const h = Math.max((v / maxVal * 36), 2);
+        return `<div class="bar" style="height:${h}px;background:${s.color};opacity:0.7;flex:1"></div>`;
+      }).join('')}</div>
+      <div style="display:flex;justify-content:space-between;font-family:var(--mono);font-size:8px;color:var(--muted);margin-top:4px;">
+        <span>${dates[dates.length-1] ? fmtDate(dates[dates.length-1].date) : ''}</span>
+        <span>${fmtDate(dates[0]?.date)}</span>
+      </div>
+    </div>`;
+  });
+
+  html += '</div>';
+
+  // ── TRANSACTION COUNT + AVG BASKET COMPARISON ──
+  html += '<div class="section-title"><span>◆</span> TRANSACTIONS & BASKET SIZE — ' + data.dayName.toUpperCase() + '</div>';
+  html += '<div class="heatmap-wrap"><table class="heatmap-table"><thead><tr><th>DATE</th>';
+  stores.forEach(s => { html += `<th>${s.name} TXN</th><th>${s.name} BASKET</th>`; });
+  html += '</tr></thead><tbody>';
+
+  dates.forEach((day, di) => {
+    html += `<tr><td style="font-weight:700">${fmtDate(day.date)}</td>`;
+    day.stores.forEach((st, si) => {
+      const txn = st.summary?.transaction_count || 0;
+      const basket = st.summary?.avg_basket || 0;
+      const prevTxn = di < dates.length - 1 ? (dates[di+1]?.stores[si]?.summary?.transaction_count || 0) : null;
+      const prevBasket = di < dates.length - 1 ? (dates[di+1]?.stores[si]?.summary?.avg_basket || 0) : null;
+      const txnChange = prevTxn ? pctChange(txn, prevTxn) : null;
+      const basketChange = prevBasket ? pctChange(basket, prevBasket) : null;
+
+      html += `<td style="background:${heatColor(txnChange)}">${txn}</td>`;
+      html += `<td style="background:${heatColor(basketChange)}">${fmt(basket)}</td>`;
+    });
+    html += '</tr>';
+  });
+
+  html += '</tbody></table></div>';
+
+  el.innerHTML = html;
 }
 
 // ═══════════════════════════════════════════════════════════════
