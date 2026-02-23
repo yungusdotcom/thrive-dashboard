@@ -71,7 +71,7 @@ async function getLocations() {
       const importId = loc.locationId || loc.importId || loc.import_id || loc._id || loc.id;
       return {
         importId,
-        name:  loc.name,
+        name: loc.locationName || loc.name,
         id:    cfg?.id    || (loc.locationName || loc.name || '').toLowerCase().replace(/\s+/g, '_'),
         color: cfg?.color || '#888888',
       };
