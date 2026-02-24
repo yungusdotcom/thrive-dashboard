@@ -110,13 +110,27 @@ async function getLocations() {
   return _locations;
 }
 
-// ── Date helpers ──────────────────────────────────────────────
+// ── Date helpers (Pacific Time — Nevada stores) ──────────────
+const TZ = 'America/Los_Angeles';
+
 function toDateStr(d) {
-  return d.toISOString().split('T')[0];
+  // Format as yyyy-mm-dd in Pacific time
+  return d.toLocaleDateString('en-CA', { timeZone: TZ }); // en-CA gives yyyy-mm-dd
+}
+
+function nowPacific() {
+  // Get current date/time components in Pacific
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: TZ,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+  }).formatToParts(new Date());
+  const get = (type) => parts.find(p => p.type === type)?.value;
+  return new Date(`${get('year')}-${get('month')}-${get('day')}T${get('hour')}:${get('minute')}:${get('second')}`);
 }
 
 function weekRange(weeksBack = 0) {
-  const now = new Date();
+  const now = nowPacific();
   const dow = now.getDay();
   const mon = new Date(now);
   mon.setDate(now.getDate() - ((dow + 6) % 7) - weeksBack * 7);
@@ -128,12 +142,13 @@ function weekRange(weeksBack = 0) {
 }
 
 function todayRange() {
-  const d = toDateStr(new Date());
+  const d = toDateStr(nowPacific());
   return { start: d, end: d };
 }
 
 function ytdRange() {
-  return { start: `${new Date().getFullYear()}-01-01`, end: toDateStr(new Date()) };
+  const now = nowPacific();
+  return { start: `${now.getFullYear()}-01-01`, end: toDateStr(now) };
 }
 
 // ── Fetch orders ──────────────────────────────────────────────
@@ -359,33 +374,48 @@ async function getAllStoresSales(startDate, endDate) {
   return results;
 }
 
-// ── Weekly trend — sequential per store, 3 weeks at a time ───
+// ── Permanent cache for completed weeks (never changes) ──────
+// Key format: "locationId:weekStart" → { week, summary }
+const _weekCache = {};
+
+function weekCacheKey(importId, weekStart) {
+  return `${importId}:${weekStart}`;
+}
+
+// Check if a week is completed (its end date is before today)
+function isWeekCompleted(week) {
+  const today = toDateStr(new Date());
+  return week.end < today;
+}
+
+// ── Weekly trend — uses permanent cache for old weeks ────────
 async function getWeeklyTrend(importId, weeksBack = 12) {
   const weeks = Array.from({ length: weeksBack }, (_, i) => weekRange(weeksBack - 1 - i));
   const results = [];
 
-  // Process 3 weeks at a time to stay within rate limits
-  for (let i = 0; i < weeks.length; i += 3) {
-    const batch = weeks.slice(i, i + 3);
-    const batchResults = await Promise.allSettled(
-      batch.map(async w => {
-        const { orders } = await getOrdersForLocation(importId, w.start, w.end);
-        return { week: w, summary: summarizeOrders(orders) };
-      })
-    );
-    for (let j = 0; j < batchResults.length; j++) {
-      const r = batchResults[j];
-      results.push({
-        week: batch[j],
-        summary: r.status === 'fulfilled' ? r.value.summary : null,
-        error: r.status === 'rejected' ? r.reason?.message : null,
-      });
-      if (r.status === 'rejected') {
-        console.error(`Trend error week ${batch[j].start}: ${r.reason?.message}`);
-      }
+  for (const w of weeks) {
+    const cacheKey = weekCacheKey(importId, w.start);
+
+    // If completed week is in cache, use it instantly
+    if (isWeekCompleted(w) && _weekCache[cacheKey]) {
+      results.push(_weekCache[cacheKey]);
+      continue;
     }
-    // Small delay between batches
-    if (i + 3 < weeks.length) await sleep(200);
+
+    // Otherwise fetch it
+    try {
+      const { orders } = await getOrdersForLocation(importId, w.start, w.end);
+      const entry = { week: w, summary: summarizeOrders(orders), error: null };
+      results.push(entry);
+
+      // Permanently cache completed weeks
+      if (isWeekCompleted(w) && entry.summary && entry.summary.net_sales > 0) {
+        _weekCache[cacheKey] = entry;
+      }
+    } catch (err) {
+      console.error(`Trend error week ${w.start}: ${err.message}`);
+      results.push({ week: w, summary: null, error: err.message });
+    }
   }
 
   return results;
@@ -397,10 +427,14 @@ async function getAllStoresWeeklyTrend(weeksBack = 12) {
   const locations = await getLocations();
   const results = [];
 
-  // Process one store at a time (sequential)
   for (const loc of locations) {
     try {
-      console.log(`  Fetching trend: ${loc.name}...`);
+      // Count how many weeks are already cached for this store
+      const weeks = Array.from({ length: weeksBack }, (_, i) => weekRange(weeksBack - 1 - i));
+      const cached = weeks.filter(w => _weekCache[weekCacheKey(loc.importId, w.start)] && isWeekCompleted(w)).length;
+      const toFetch = weeksBack - cached;
+      console.log(`  Fetching trend: ${loc.name} (${cached} cached, ${toFetch} to fetch)...`);
+
       const trend = await getWeeklyTrend(loc.importId, weeksBack);
       results.push({ store: loc, trend });
     } catch (err) {
