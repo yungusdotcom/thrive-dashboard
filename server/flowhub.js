@@ -31,20 +31,41 @@ async function flowhubGet(path, params = {}) {
     if (v !== undefined && v !== null) url.searchParams.set(k, String(v));
   });
 
-  const res = await fetch(url.toString(), {
-    headers: {
-      'clientId':     CLIENT_ID,
-      'key':          CLIENT_KEY,
-      'Accept':       'application/json',
-      'Content-Type': 'application/json',
-    },
-  });
+  // Retry loop with exponential backoff for 429/500
+  for (let attempt = 0; attempt < 4; attempt++) {
+    if (attempt > 0) {
+      const delay = Math.min(2000 * Math.pow(2, attempt), 15000);
+      console.log(`  ↻ retry #${attempt} in ${delay}ms...`);
+      await new Promise(r => setTimeout(r, delay));
+    }
 
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    throw new Error(`Flowhub ${res.status} ${path}: ${body.slice(0, 500)}`);
+    const res = await fetch(url.toString(), {
+      headers: {
+        'clientId':     CLIENT_ID,
+        'key':          CLIENT_KEY,
+        'Accept':       'application/json',
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (res.status === 429) {
+      console.log(`⚠ 429 rate limited: ${path}`);
+      continue; // retry with backoff
+    }
+
+    if (res.status === 500 && attempt < 3) {
+      console.log(`⚠ 500 server error: ${path}, retrying...`);
+      continue; // retry with backoff
+    }
+
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new Error(`Flowhub ${res.status} ${path}: ${body.slice(0, 500)}`);
+    }
+    return res.json();
   }
-  return res.json();
+
+  throw new Error(`Flowhub: max retries exceeded for ${path}`);
 }
 
 // ── Locations ─────────────────────────────────────────────────
@@ -118,107 +139,72 @@ function ytdRange() {
 // ── Fetch orders ──────────────────────────────────────────────
 let _schemaLogged = false;
 
-// Core single-request fetcher (one date range, one page size)
-async function _fetchOrders(importId, start, end, pageSize = 500) {
+// Global rate limiter: ensure minimum gap between ANY Flowhub API call
+let _lastApiCall = 0;
+const MIN_API_GAP_MS = 400; // ~2.5 req/sec max
+
+async function rateLimitedGet(path, params) {
+  const now = Date.now();
+  const wait = Math.max(0, MIN_API_GAP_MS - (now - _lastApiCall));
+  if (wait > 0) await sleep(wait);
+  _lastApiCall = Date.now();
+  return flowhubGet(path, params);
+}
+
+async function getOrdersForLocation(importId, startDate, endDate) {
+  const start = startDate.split('T')[0];
+  const end   = endDate.split('T')[0];
+  const PAGE_SIZE = 500;
   let page = 1;
   let allOrders = [];
   let total = 0;
 
   while (true) {
-    const data = await flowhubGet(`/v1/orders/findByLocationId/${importId}`, {
-      created_after:  start,
-      created_before: end,
-      page_size:      pageSize,
-      page,
-      order_by:       'asc',
-    });
-
-    const batch = data.orders || [];
-    total = data.total || 0;
-    allOrders = allOrders.concat(batch);
-
-    // Log schema once
-    if (!_schemaLogged && batch.length > 0) {
-      _schemaLogged = true;
-      const sample = batch[0];
-      console.log('\n═══ ORDER SCHEMA DISCOVERY ═══');
-      console.log('ORDER KEYS:', Object.keys(sample).join(', '));
-      for (const [k, v] of Object.entries(sample)) {
-        if (k === 'itemsInCart') continue;
-        const val = typeof v === 'object' ? JSON.stringify(v) : String(v);
-        console.log(`  ${k}: ${val.slice(0, 120)}`);
-      }
-      if (sample.itemsInCart && sample.itemsInCart.length > 0) {
-        const item = sample.itemsInCart[0];
-        console.log('\nITEM KEYS:', Object.keys(item).join(', '));
-        for (const [k, v] of Object.entries(item)) {
-          const val = typeof v === 'object' ? JSON.stringify(v) : String(v);
-          console.log(`  ${k}: ${val.slice(0, 200)}`);
-        }
-      }
-      console.log('═══ END SCHEMA ═══\n');
-    }
-
-    if (allOrders.length >= total || batch.length < pageSize) break;
-    page++;
-    await sleep(50);
-  }
-
-  return { total, orders: allOrders };
-}
-
-// Helper: enumerate each date between start and end (inclusive)
-function dateRange(startStr, endStr) {
-  const dates = [];
-  const d = new Date(startStr + 'T12:00:00Z');
-  const end = new Date(endStr + 'T12:00:00Z');
-  while (d <= end) {
-    dates.push(toDateStr(d));
-    d.setDate(d.getDate() + 1);
-  }
-  return dates;
-}
-
-// Main fetcher: splits multi-day ranges into single-day queries to avoid Flowhub 500s
-async function getOrdersForLocation(importId, startDate, endDate) {
-  const start = startDate.split('T')[0];
-  const end   = endDate.split('T')[0];
-
-  // If single day, just fetch directly
-  if (start === end) {
     try {
-      return await _fetchOrders(importId, start, end, 500);
-    } catch (err) {
-      if (err.message.includes('500')) {
-        console.error(`✗ 500 for ${importId.slice(0,8)} ${start}: ${err.message}`);
-        return { total: 0, orders: [] };
+      const data = await rateLimitedGet(`/v1/orders/findByLocationId/${importId}`, {
+        created_after:  start,
+        created_before: end,
+        page_size:      PAGE_SIZE,
+        page,
+        order_by:       'asc',
+      });
+
+      const batch = data.orders || [];
+      total = data.total || 0;
+      allOrders = allOrders.concat(batch);
+
+      // Log schema once
+      if (!_schemaLogged && batch.length > 0) {
+        _schemaLogged = true;
+        const sample = batch[0];
+        console.log('\n═══ ORDER SCHEMA DISCOVERY ═══');
+        console.log('ORDER KEYS:', Object.keys(sample).join(', '));
+        for (const [k, v] of Object.entries(sample)) {
+          if (k === 'itemsInCart') continue;
+          const val = typeof v === 'object' ? JSON.stringify(v) : String(v);
+          console.log(`  ${k}: ${val.slice(0, 120)}`);
+        }
+        if (sample.itemsInCart && sample.itemsInCart.length > 0) {
+          const item = sample.itemsInCart[0];
+          console.log('\nITEM KEYS:', Object.keys(item).join(', '));
+          for (const [k, v] of Object.entries(item)) {
+            const val = typeof v === 'object' ? JSON.stringify(v) : String(v);
+            console.log(`  ${k}: ${val.slice(0, 200)}`);
+          }
+        }
+        console.log('═══ END SCHEMA ═══\n');
       }
-      throw err;
+
+      if (allOrders.length >= total || batch.length < PAGE_SIZE) break;
+      page++;
+    } catch (err) {
+      console.error(`✗ Fetch error ${importId.slice(0,8)} ${start}→${end} p${page}: ${err.message}`);
+      break; // return what we have
     }
   }
 
-  // Multi-day: split into individual days and fetch each
-  const days = dateRange(start, end);
-  let allOrders = [];
-
-  // Fetch 3 days at a time in parallel (safe concurrency)
-  for (let i = 0; i < days.length; i += 3) {
-    const batch = days.slice(i, i + 3);
-    const results = await Promise.allSettled(
-      batch.map(day => _fetchOrders(importId, day, day, 500))
-    );
-    results.forEach((r, j) => {
-      if (r.status === 'fulfilled') {
-        allOrders = allOrders.concat(r.value.orders);
-      } else {
-        console.log(`⚠ Failed day ${batch[j]} for ${importId.slice(0,8)}: ${r.reason?.message}`);
-      }
-    });
-    if (i + 3 < days.length) await sleep(50);
-  }
-
-  if (allOrders.length === 0) {
-    console.log(`⚠ 0 orders: location=${importId.slice(0,8)} range=${start}→${end}`);
+  if (allOrders.length === 0 && total === 0) {
+    console.log(`⚠ 0 orders: ${importId.slice(0,8)} ${start}→${end}`);
   }
 
   return { total: allOrders.length, orders: allOrders };

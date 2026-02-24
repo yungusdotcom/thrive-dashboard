@@ -93,7 +93,7 @@ app.get('/api/diag/date-test', auth, async (req, res) => {
 // Executive dashboard
 app.get('/api/dashboard', auth, async (req, res) => {
   try {
-    const data = await cached('dashboard', 300, () => fh.getDashboardData());
+    const data = await cached('dashboard', 900, () => fh.getDashboardData());
     res.json(data);
   } catch (err) {
     console.error('Dashboard error:', err.message);
@@ -105,7 +105,7 @@ app.get('/api/dashboard', auth, async (req, res) => {
 app.get('/api/trend', auth, async (req, res) => {
   const weeks = Math.min(parseInt(req.query.weeks) || 12, 52);
   try {
-    const data = await cached(`trend_all_${weeks}`, 600, () => fh.getAllStoresWeeklyTrend(weeks));
+    const data = await cached(`trend_all_${weeks}`, 1800, () => fh.getAllStoresWeeklyTrend(weeks));
     res.json(data);
   } catch (err) {
     console.error('Trend error:', err.message);
@@ -120,7 +120,7 @@ app.get('/api/trend/:storeId', auth, async (req, res) => {
     const locations = await fh.getLocations();
     const loc = locations.find(l => l.id === req.params.storeId);
     if (!loc) return res.status(404).json({ error: 'Store not found' });
-    const data = await cached(`trend_${loc.id}_${weeks}`, 600, () => fh.getWeeklyTrend(loc.importId, weeks));
+    const data = await cached(`trend_${loc.id}_${weeks}`, 1800, () => fh.getWeeklyTrend(loc.importId, weeks));
     res.json({ store: loc, trend: data });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -215,7 +215,7 @@ app.get('/api/day-vs-day', auth, async (req, res) => {
   const dow = parseInt(req.query.dow ?? new Date().getDay());
   const weeks = Math.min(parseInt(req.query.weeks) || 4, 8);
   try {
-    const data = await cached(`dvd_${dow}_${weeks}`, 600, () => fh.getSingleDayVsDay(dow, weeks));
+    const data = await cached(`dvd_${dow}_${weeks}`, 1800, () => fh.getSingleDayVsDay(dow, weeks));
     res.json(data);
   } catch (err) {
     console.error('Day vs Day error:', err.message);
