@@ -118,80 +118,110 @@ function ytdRange() {
 // ── Fetch orders ──────────────────────────────────────────────
 let _schemaLogged = false;
 
+// Core single-request fetcher (one date range, one page size)
+async function _fetchOrders(importId, start, end, pageSize = 500) {
+  let page = 1;
+  let allOrders = [];
+  let total = 0;
+
+  while (true) {
+    const data = await flowhubGet(`/v1/orders/findByLocationId/${importId}`, {
+      created_after:  start,
+      created_before: end,
+      page_size:      pageSize,
+      page,
+      order_by:       'asc',
+    });
+
+    const batch = data.orders || [];
+    total = data.total || 0;
+    allOrders = allOrders.concat(batch);
+
+    // Log schema once
+    if (!_schemaLogged && batch.length > 0) {
+      _schemaLogged = true;
+      const sample = batch[0];
+      console.log('\n═══ ORDER SCHEMA DISCOVERY ═══');
+      console.log('ORDER KEYS:', Object.keys(sample).join(', '));
+      for (const [k, v] of Object.entries(sample)) {
+        if (k === 'itemsInCart') continue;
+        const val = typeof v === 'object' ? JSON.stringify(v) : String(v);
+        console.log(`  ${k}: ${val.slice(0, 120)}`);
+      }
+      if (sample.itemsInCart && sample.itemsInCart.length > 0) {
+        const item = sample.itemsInCart[0];
+        console.log('\nITEM KEYS:', Object.keys(item).join(', '));
+        for (const [k, v] of Object.entries(item)) {
+          const val = typeof v === 'object' ? JSON.stringify(v) : String(v);
+          console.log(`  ${k}: ${val.slice(0, 200)}`);
+        }
+      }
+      console.log('═══ END SCHEMA ═══\n');
+    }
+
+    if (allOrders.length >= total || batch.length < pageSize) break;
+    page++;
+    await sleep(50);
+  }
+
+  return { total, orders: allOrders };
+}
+
+// Helper: enumerate each date between start and end (inclusive)
+function dateRange(startStr, endStr) {
+  const dates = [];
+  const d = new Date(startStr + 'T12:00:00Z');
+  const end = new Date(endStr + 'T12:00:00Z');
+  while (d <= end) {
+    dates.push(toDateStr(d));
+    d.setDate(d.getDate() + 1);
+  }
+  return dates;
+}
+
+// Main fetcher: splits multi-day ranges into single-day queries to avoid Flowhub 500s
 async function getOrdersForLocation(importId, startDate, endDate) {
-  // Flowhub requires yyyy-mm-dd format
   const start = startDate.split('T')[0];
   const end   = endDate.split('T')[0];
 
-  // Try with smaller page size first (Flowhub 500s on large page_size for older dates)
-  const pageSizes = [2000, 500];
-  let lastError = null;
-
-  for (const PAGE_SIZE of pageSizes) {
+  // If single day, just fetch directly
+  if (start === end) {
     try {
-      let page = 1;
-      let allOrders = [];
-      let total = 0;
-
-      while (true) {
-        const data = await flowhubGet(`/v1/orders/findByLocationId/${importId}`, {
-          created_after:  start,
-          created_before: end,
-          page_size:      PAGE_SIZE,
-          page,
-          order_by:       'asc',
-        });
-
-        const batch = data.orders || [];
-        total = data.total || 0;
-        allOrders = allOrders.concat(batch);
-
-        // Log schema once
-        if (!_schemaLogged && batch.length > 0) {
-          _schemaLogged = true;
-          const sample = batch[0];
-          console.log('\n═══ ORDER SCHEMA DISCOVERY ═══');
-          console.log('ORDER KEYS:', Object.keys(sample).join(', '));
-          for (const [k, v] of Object.entries(sample)) {
-            if (k === 'itemsInCart') continue;
-            const val = typeof v === 'object' ? JSON.stringify(v) : String(v);
-            console.log(`  ${k}: ${val.slice(0, 120)}`);
-          }
-          if (sample.itemsInCart && sample.itemsInCart.length > 0) {
-            const item = sample.itemsInCart[0];
-            console.log('\nITEM KEYS:', Object.keys(item).join(', '));
-            for (const [k, v] of Object.entries(item)) {
-              const val = typeof v === 'object' ? JSON.stringify(v) : String(v);
-              console.log(`  ${k}: ${val.slice(0, 200)}`);
-            }
-          }
-          console.log('═══ END SCHEMA ═══\n');
-        }
-
-        if (allOrders.length >= total || batch.length < PAGE_SIZE) break;
-        page++;
-        await sleep(100); // small delay between pages
-      }
-
-      if (total === 0) {
-        console.log(`⚠ 0 orders: location=${importId.slice(0,8)} range=${start}→${end}`);
-      }
-
-      return { total, orders: allOrders };
+      return await _fetchOrders(importId, start, end, 500);
     } catch (err) {
-      lastError = err;
       if (err.message.includes('500')) {
-        console.log(`⚠ 500 error with page_size=${PAGE_SIZE} for ${importId.slice(0,8)} ${start}→${end}, retrying smaller...`);
-        await sleep(300);
-        continue; // try next smaller page size
+        console.error(`✗ 500 for ${importId.slice(0,8)} ${start}: ${err.message}`);
+        return { total: 0, orders: [] };
       }
-      throw err; // non-500 errors bubble up immediately
+      throw err;
     }
   }
 
-  // All page sizes failed
-  console.error(`✗ All retries failed for ${importId.slice(0,8)} ${start}→${end}: ${lastError?.message}`);
-  return { total: 0, orders: [] };
+  // Multi-day: split into individual days and fetch each
+  const days = dateRange(start, end);
+  let allOrders = [];
+
+  // Fetch 3 days at a time in parallel (safe concurrency)
+  for (let i = 0; i < days.length; i += 3) {
+    const batch = days.slice(i, i + 3);
+    const results = await Promise.allSettled(
+      batch.map(day => _fetchOrders(importId, day, day, 500))
+    );
+    results.forEach((r, j) => {
+      if (r.status === 'fulfilled') {
+        allOrders = allOrders.concat(r.value.orders);
+      } else {
+        console.log(`⚠ Failed day ${batch[j]} for ${importId.slice(0,8)}: ${r.reason?.message}`);
+      }
+    });
+    if (i + 3 < days.length) await sleep(50);
+  }
+
+  if (allOrders.length === 0) {
+    console.log(`⚠ 0 orders: location=${importId.slice(0,8)} range=${start}→${end}`);
+  }
+
+  return { total: allOrders.length, orders: allOrders };
 }
 
 // ── Summarize orders → KPIs ───────────────────────────────────
