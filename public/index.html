@@ -2,7 +2,10 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="theme-color" content="#07090e">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>THRIVE — Executive Intelligence</title>
 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
@@ -131,13 +134,91 @@ header { display:flex; justify-content:space-between; align-items:flex-end; marg
 @keyframes loadbar { 0%,100%{width:20px;opacity:.3} 50%{width:80px;opacity:1} }
 
 /* ── RESPONSIVE ─────────────────────────────── */
+@media(max-width:1024px) {
+  .wrap { padding:20px; }
+  .kpi-row { grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:12px; }
+  .store-grid { grid-template-columns:repeat(auto-fill, minmax(160px, 1fr)); }
+  .velocity-grid { grid-template-columns:1fr 1fr; }
+}
+
 @media(max-width:768px) {
-  .wrap { padding:16px; }
-  .kpi-row { grid-template-columns:1fr 1fr; }
-  .store-grid { grid-template-columns:1fr 1fr; }
-  .velocity-grid { grid-template-columns:1fr; }
-  header { flex-direction:column; align-items:flex-start; gap:12px; }
-  .header-right { text-align:left; }
+  .wrap { padding:12px 10px; }
+
+  /* Header — stack vertically */
+  header { flex-direction:column; align-items:flex-start; gap:8px; padding-bottom:12px; margin-bottom:16px; }
+  .logo h1 { font-size:32px; letter-spacing:4px; }
+  .logo p { font-size:8px; letter-spacing:2px; }
+  .header-right { width:100%; display:flex; align-items:center; justify-content:space-between; }
+  .header-right .hdate { font-size:9px; }
+  .header-right .hstatus { gap:6px; }
+
+  /* Nav tabs — scrollable horizontal */
+  .nav-tabs { overflow-x:auto; -webkit-overflow-scrolling:touch; scrollbar-width:none; gap:0; margin-bottom:16px; flex-wrap:nowrap; }
+  .nav-tabs::-webkit-scrollbar { display:none; }
+  .nav-tabs button { font-size:9px; letter-spacing:1px; padding:10px 12px; white-space:nowrap; flex-shrink:0; }
+
+  /* KPIs — 2 columns, smaller */
+  .kpi-row { grid-template-columns:1fr 1fr; gap:8px; margin-bottom:16px; }
+  .kpi { padding:12px; }
+  .kpi .label { font-size:7px; letter-spacing:2px; margin-bottom:4px; }
+  .kpi .value { font-size:18px; }
+  .kpi .sub { font-size:8px; margin-top:4px; }
+  .kpi .change { font-size:9px; }
+
+  /* Section titles */
+  .section-title { font-size:8px; letter-spacing:2px; margin:20px 0 10px; }
+
+  /* Store grid — 2 columns */
+  .store-grid { grid-template-columns:1fr 1fr; gap:8px; margin-bottom:16px; }
+  .store-card { padding:10px; }
+  .store-card .sname { font-size:12px; }
+  .store-card .sval { font-size:15px; }
+  .store-card .schange { font-size:9px; }
+
+  /* Heatmap — scrollable with sticky first column */
+  .heatmap-wrap { margin-bottom:16px; -webkit-overflow-scrolling:touch; }
+  .heatmap-table th, .heatmap-table td { padding:6px 5px; font-size:9px; min-width:70px; }
+  .heatmap-table th:first-child, .heatmap-table td:first-child { position:sticky; left:0; z-index:3; min-width:80px; }
+
+  /* Store selector — horizontal scroll */
+  .store-selector { flex-wrap:nowrap; overflow-x:auto; -webkit-overflow-scrolling:touch; scrollbar-width:none; padding-bottom:4px; }
+  .store-selector::-webkit-scrollbar { display:none; }
+  .store-selector button { font-size:9px; padding:6px 10px; white-space:nowrap; flex-shrink:0; }
+
+  /* Velocity cards — single column */
+  .velocity-grid { grid-template-columns:1fr; gap:12px; }
+  .vel-card { padding:14px; }
+  .vel-card .vname { font-size:14px; }
+  .vel-card .vrow { font-size:10px; }
+
+  /* Charts — reduce height */
+  .chart-container { padding:12px; margin-bottom:16px; min-height:140px; }
+  .chart-header h3 { font-size:8px; letter-spacing:2px; }
+
+  /* Data tables — scrollable */
+  .data-table { font-size:9px; }
+  .data-table th { font-size:8px; padding:8px 6px; }
+  .data-table td { padding:8px 6px; }
+
+  /* Rankings grid — single column on mobile */
+  #rankingsSection > div { grid-template-columns:1fr !important; }
+
+  /* Day vs Day buttons */
+  #dowSelector button { font-size:10px; padding:8px 10px; min-width:40px !important; }
+
+  /* Login */
+  .login-box { padding:32px 20px; margin:0 16px; }
+  .login-box h1 { font-size:40px; letter-spacing:4px; }
+
+  /* Footer */
+  footer { font-size:8px !important; }
+}
+
+@media(max-width:400px) {
+  .kpi-row { grid-template-columns:1fr; }
+  .store-grid { grid-template-columns:1fr; }
+  .kpi .value { font-size:20px; }
+  .nav-tabs button { font-size:8px; padding:8px 8px; }
 }
 
 /* ── ANIMATIONS ─────────────────────────────── */
