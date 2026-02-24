@@ -1,7 +1,7 @@
 // server/index.js
 // ============================================================
 // Thrive Dashboard — Express Server
-// Redis-backed stale-while-revalidate caching
+// Redis-backed stale-while-revalidate for ALL historical data
 // ============================================================
 
 require('dotenv').config();
@@ -32,7 +32,7 @@ function auth(req, res, next) {
   res.status(401).json({ error: 'Unauthorized' });
 }
 
-// ── Internal auth (for cron) ──────────────────────────────────
+// ── Internal auth (for rebuild endpoint) ──────────────────────
 function internalAuth(req, res, next) {
   const secret = process.env.INTERNAL_SECRET;
   if (!secret) return next();
@@ -41,13 +41,25 @@ function internalAuth(req, res, next) {
   res.status(403).json({ error: 'Forbidden' });
 }
 
-// ── Cache helper (in-memory, for dashboard/non-trend) ─────────
+// ── In-memory cache helper (for non-Redis endpoints) ──────────
 async function cached(key, ttl, fn) {
   const hit = cache.get(key);
   if (hit !== undefined) return hit;
   const result = await fn();
   cache.set(key, result, ttl);
   return result;
+}
+
+// ── Rebuild trigger helper ────────────────────────────────────
+// Triggers async rebuild for a section if not already running
+const _rebuildingFlags = {};
+function triggerRebuild(section) {
+  if (_rebuildingFlags[section]) return; // already in flight
+  _rebuildingFlags[section] = true;
+  console.log(`→ Triggering async rebuild: ${section}`);
+  rebuild.rebuildSection(section)
+    .catch(err => console.error(`Async rebuild ${section} failed:`, err.message))
+    .finally(() => { _rebuildingFlags[section] = false; });
 }
 
 // ── Routes ────────────────────────────────────────────────────
@@ -77,44 +89,43 @@ app.get('/api/stores', async (req, res) => {
 app.get('/api/diag/order-sample', auth, async (req, res) => {
   try {
     const locations = await fh.getLocations();
-    const loc = locations[0];
-    const sample = await fh.getRawOrderSample(loc.importId);
-    res.json({ store: loc.name, ...sample });
+    const sample = await fh.getRawOrderSample(locations[0].importId);
+    res.json({ store: locations[0].name, ...sample });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// ★ DIAGNOSTIC — test date range query
+// ★ DIAGNOSTIC — date test
 app.get('/api/diag/date-test', auth, async (req, res) => {
   try {
     const locations = await fh.getLocations();
-    const storeId = req.query.store || locations[0].id;
-    const loc = locations.find(l => l.id === storeId) || locations[0];
+    const loc = locations.find(l => l.id === (req.query.store || locations[0].id)) || locations[0];
     const start = req.query.start || fh.weekRange(1).start;
     const end = req.query.end || fh.weekRange(1).end;
     const { total, orders } = await fh.getOrdersForLocation(loc.importId, start, end);
-    res.json({
-      store: loc.name,
-      importId: loc.importId,
-      dateRange: { start, end },
-      total,
-      ordersReturned: orders.length,
-      firstOrderDate: orders[0]?.createdAt || null,
-      lastOrderDate: orders[orders.length - 1]?.createdAt || null,
-    });
+    res.json({ store: loc.name, importId: loc.importId, dateRange: { start, end }, total, ordersReturned: orders.length,
+      firstOrderDate: orders[0]?.createdAt || null, lastOrderDate: orders[orders.length - 1]?.createdAt || null });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
 // ═══════════════════════════════════════════════════════════════
-// EXECUTIVE DASHBOARD — fetches from Flowhub (today + this week)
+// DASHBOARD — Redis first, fallback to direct Flowhub
 // ═══════════════════════════════════════════════════════════════
 app.get('/api/dashboard', auth, async (req, res) => {
   try {
+    // Try Redis
+    const redisCached = await rebuild.getCachedDashboard();
+    if (redisCached) {
+      return res.json({ ...redisCached, source: 'redis' });
+    }
+
+    // Fallback: direct fetch (and trigger background cache)
+    triggerRebuild('dashboard');
     const data = await cached('dashboard', 300, () => fh.getDashboardData());
-    res.json(data);
+    res.json({ ...data, source: 'direct' });
   } catch (err) {
     console.error('Dashboard error:', err.message);
     res.status(500).json({ error: err.message });
@@ -122,42 +133,18 @@ app.get('/api/dashboard', auth, async (req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════════════
-// TREND — stale-while-revalidate from Redis
-// NEVER blocks on Flowhub. Reads Redis only.
+// TREND — Redis only, never blocks on Flowhub
 // ═══════════════════════════════════════════════════════════════
 app.get('/api/trend', auth, async (req, res) => {
   try {
-    // Try Redis first
     const redisCached = await rebuild.getCachedTrend();
-
     if (redisCached) {
-      return res.json({
-        source: 'redis',
-        generatedAt: redisCached.generatedAt,
-        rebuildDurationMs: redisCached.rebuildDurationMs,
-        weekStarts: redisCached.weekStarts,
-        stores: redisCached.stores,
-      });
+      return res.json({ source: 'redis', ...redisCached });
     }
 
-    // No Redis cache — try in-memory fallback (old behavior)
-    const weeks = Math.min(parseInt(req.query.weeks) || 12, 52);
-    const memCached = cache.get(`trend_all_${weeks}`);
-    if (memCached) {
-      return res.json(memCached);
-    }
-
-    // Nothing cached anywhere — trigger async rebuild, return building status
-    console.log('Trend: no cache — triggering async rebuild');
-    rebuild.rebuildTrendCache().catch(err =>
-      console.error('Async rebuild failed:', err.message)
-    );
-
-    return res.json({
-      status: 'building',
-      message: 'Trend data is being built. Refresh in ~60 seconds.',
-    });
-
+    // No cache — trigger rebuild, return building status
+    triggerRebuild('trend');
+    return res.json({ status: 'building', message: 'Trend data is being built. Refresh in ~60 seconds.' });
   } catch (err) {
     console.error('Trend error:', err.message);
     res.status(500).json({ error: err.message });
@@ -165,12 +152,12 @@ app.get('/api/trend', auth, async (req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════════════
-// TREND (single store) — tries Redis, falls back to direct
+// TREND (single store) — extract from Redis all-stores cache
 // ═══════════════════════════════════════════════════════════════
 app.get('/api/trend/:storeId', auth, async (req, res) => {
   const weeks = Math.min(parseInt(req.query.weeks) || 12, 52);
   try {
-    // Try Redis — extract single store from all-stores cache
+    // Try Redis
     const allCached = await rebuild.getCachedTrend();
     if (allCached && allCached.stores[req.params.storeId]) {
       const storeData = allCached.stores[req.params.storeId];
@@ -179,15 +166,11 @@ app.get('/api/trend/:storeId', auth, async (req, res) => {
       return res.json({
         source: 'redis',
         store: loc || { id: req.params.storeId, name: storeData.name, color: storeData.color },
-        trend: storeData.weeks.map(w => ({
-          week: { start: w.week, end: w.weekEnd },
-          summary: w.summary,
-          error: w.error,
-        })),
+        trend: storeData.weeks.map(w => ({ week: { start: w.week, end: w.weekEnd }, summary: w.summary, error: w.error })),
       });
     }
 
-    // Fallback: direct Flowhub fetch
+    // Fallback: direct
     const locations = await fh.getLocations();
     const loc = locations.find(l => l.id === req.params.storeId);
     if (!loc) return res.status(404).json({ error: 'Store not found' });
@@ -199,36 +182,61 @@ app.get('/api/trend/:storeId', auth, async (req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════════════
-// REBUILD — triggered by Railway cron every 5 min
+// DAY VS DAY — Redis first, fallback to direct
 // ═══════════════════════════════════════════════════════════════
-app.post('/internal/rebuild-trend-cache', internalAuth, async (req, res) => {
-  console.log('→ Rebuild triggered via POST');
+app.get('/api/day-vs-day', auth, async (req, res) => {
+  const dow = parseInt(req.query.dow ?? new Date().getDay());
+  const weeks = Math.min(parseInt(req.query.weeks) || 4, 8);
   try {
-    const result = await rebuild.rebuildTrendCache();
-    res.json(result);
+    // Try Redis
+    const redisCached = await rebuild.getCachedDvd(dow);
+    if (redisCached) {
+      return res.json({ ...redisCached, source: 'redis' });
+    }
+
+    // Fallback: direct fetch (and trigger full dvd rebuild)
+    triggerRebuild('dvd');
+    const data = await cached(`dvd_${dow}_${weeks}`, 1800, () => fh.getSingleDayVsDay(dow, weeks));
+    res.json({ ...data, source: 'direct' });
   } catch (err) {
-    console.error('Rebuild endpoint error:', err.message);
-    res.status(500).json({ status: 'error', error: err.message });
+    console.error('Day vs Day error:', err.message);
+    res.status(500).json({ error: err.message });
   }
 });
 
-// Also support GET for easy testing
-app.get('/internal/rebuild-trend-cache', internalAuth, async (req, res) => {
-  console.log('→ Rebuild triggered via GET');
+// ═══════════════════════════════════════════════════════════════
+// BUDTENDERS — Redis first, fallback to direct
+// ═══════════════════════════════════════════════════════════════
+app.get('/api/employees', auth, async (req, res) => {
+  const { store, start, end } = req.query;
+  if (!store || !start || !end) return res.status(400).json({ error: 'store, start, end required' });
   try {
-    const result = await rebuild.rebuildTrendCache();
-    res.json(result);
+    // Try Redis (only for last-week queries, which is what the tab uses)
+    const redisCached = await rebuild.getCachedBudtenders(store);
+    if (redisCached) {
+      return res.json({ ...redisCached, source: 'redis' });
+    }
+
+    // Fallback: direct fetch (and trigger budtender rebuild)
+    triggerRebuild('budtenders');
+    const locations = await fh.getLocations();
+    const loc = locations.find(l => l.id === store);
+    if (!loc) return res.status(404).json({ error: 'Store not found' });
+    const data = await cached(`emp_${store}_${start}_${end}`, 600, async () => {
+      const { orders } = await fh.getOrdersForLocation(loc.importId, start, end);
+      return { store: loc, employees: fh.summarizeOrders(orders).budtenders };
+    });
+    res.json({ ...data, source: 'direct' });
   } catch (err) {
-    console.error('Rebuild endpoint error:', err.message);
-    res.status(500).json({ status: 'error', error: err.message });
+    res.status(500).json({ error: err.message });
   }
 });
 
 // ═══════════════════════════════════════════════════════════════
-// REMAINING EXISTING ROUTES
+// REMAINING ROUTES (no Redis caching — user-driven queries)
 // ═══════════════════════════════════════════════════════════════
 
-// Sales for a date range
+// Sales for a date range (Custom Range tab)
 app.get('/api/sales', auth, async (req, res) => {
   const { start, end, store } = req.query;
   if (!start || !end) return res.status(400).json({ error: 'start and end required (YYYY-MM-DD)' });
@@ -292,42 +300,74 @@ app.get('/api/categories', auth, async (req, res) => {
   }
 });
 
-// Budtender performance
-app.get('/api/employees', auth, async (req, res) => {
-  const { store, start, end } = req.query;
-  if (!store || !start || !end) return res.status(400).json({ error: 'store, start, end required' });
+// ═══════════════════════════════════════════════════════════════
+// REBUILD ENDPOINTS
+// ═══════════════════════════════════════════════════════════════
+
+// Full rebuild
+app.post('/internal/rebuild', internalAuth, async (req, res) => {
+  console.log('→ Full rebuild triggered');
   try {
-    const locations = await fh.getLocations();
-    const loc = locations.find(l => l.id === store);
-    if (!loc) return res.status(404).json({ error: 'Store not found' });
-    const data = await cached(`emp_${store}_${start}_${end}`, 600, async () => {
-      const { orders } = await fh.getOrdersForLocation(loc.importId, start, end);
-      return { store: loc, employees: fh.summarizeOrders(orders).budtenders };
-    });
-    res.json(data);
+    const result = await rebuild.rebuildAll();
+    res.json(result);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ status: 'error', error: err.message });
   }
 });
 
-// Day vs Day
-app.get('/api/day-vs-day', auth, async (req, res) => {
-  const dow = parseInt(req.query.dow ?? new Date().getDay());
-  const weeks = Math.min(parseInt(req.query.weeks) || 4, 8);
+app.get('/internal/rebuild', internalAuth, async (req, res) => {
+  console.log('→ Full rebuild triggered (GET)');
   try {
-    const data = await cached(`dvd_${dow}_${weeks}`, 1800, () => fh.getSingleDayVsDay(dow, weeks));
-    res.json(data);
+    const result = await rebuild.rebuildAll();
+    res.json(result);
   } catch (err) {
-    console.error('Day vs Day error:', err.message);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ status: 'error', error: err.message });
   }
 });
 
-// Cache management
-app.post('/api/cache/clear', auth, (req, res) => {
-  const count = cache.keys().length;
+// Section rebuild
+app.post('/internal/rebuild/:section', internalAuth, async (req, res) => {
+  console.log(`→ Section rebuild: ${req.params.section}`);
+  try {
+    const result = await rebuild.rebuildSection(req.params.section);
+    res.json({ status: 'ok', section: req.params.section });
+  } catch (err) {
+    res.status(500).json({ status: 'error', error: err.message });
+  }
+});
+
+// Cache status
+app.get('/internal/cache-status', internalAuth, async (req, res) => {
+  const redisOk = await redis.ping();
+  const trend = await rebuild.getCachedTrend();
+  const dashboard = await rebuild.getCachedDashboard();
+  const dvdResults = {};
+  for (let d = 0; d < 7; d++) {
+    const v = await rebuild.getCachedDvd(d);
+    dvdResults[d] = v ? v.generatedAt || true : false;
+  }
+  res.json({
+    redis: redisOk ? 'connected' : 'disconnected',
+    inMemoryKeys: cache.keys().length,
+    trend: trend ? { generatedAt: trend.generatedAt, stores: Object.keys(trend.stores).length } : null,
+    dashboard: dashboard ? { fetchedAt: dashboard.meta?.fetchedAt } : null,
+    dayVsDay: dvdResults,
+  });
+});
+
+// Cache clear
+app.post('/api/cache/clear', auth, async (req, res) => {
+  const memCount = cache.keys().length;
   cache.flushAll();
-  res.json({ cleared: count });
+  // Also clear Redis caches
+  try {
+    const client = redis.getClient();
+    const keys = await client.keys('cache:*');
+    if (keys.length > 0) await client.del(...keys);
+    res.json({ cleared: memCount, redisCleared: keys.length });
+  } catch (err) {
+    res.json({ cleared: memCount, redisError: err.message });
+  }
 });
 
 // Catch-all → frontend
@@ -342,20 +382,18 @@ app.listen(PORT, async () => {
     await fh.getLocations();
     console.log('✓ Ready');
 
-    // Check Redis
     const redisOk = await redis.ping();
-    console.log(redisOk ? '✓ Redis connected' : '⚠ Redis not available — trend will use direct fetch fallback');
+    console.log(redisOk ? '✓ Redis connected' : '⚠ Redis not available — using direct Flowhub fallback');
 
-    // Trigger initial trend cache build if Redis is up and cache is empty
     if (redisOk) {
       const existing = await rebuild.getCachedTrend();
       if (!existing) {
-        console.log('→ No trend cache — triggering initial rebuild...');
-        rebuild.rebuildTrendCache().catch(err =>
+        console.log('→ No cache — triggering full rebuild...');
+        rebuild.rebuildAll().catch(err =>
           console.error('Initial rebuild failed:', err.message)
         );
       } else {
-        console.log(`✓ Trend cache exists (generated ${existing.generatedAt})`);
+        console.log(`✓ Cache exists (generated ${existing.generatedAt})`);
       }
     }
 
