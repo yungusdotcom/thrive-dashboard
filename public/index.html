@@ -1066,44 +1066,109 @@ function renderVelocity() {
 // ═══════════════════════════════════════════════════════════════
 // BUDTENDERS TAB
 // ═══════════════════════════════════════════════════════════════
+// ── Budtender sort state ──────────────────────────────────────
+let btSortCols = []; // array of { key, dir } where dir = 'asc' | 'desc'
+let btRawData = [];  // raw employee array
+let btTotalSales = 0;
+
+function btToggleSort(key) {
+  const idx = btSortCols.findIndex(s => s.key === key);
+  if (idx === -1) {
+    // Not sorted — add as desc
+    btSortCols.push({ key, dir: 'desc' });
+  } else if (btSortCols[idx].dir === 'desc') {
+    // desc → asc
+    btSortCols[idx].dir = 'asc';
+  } else {
+    // asc → remove (reset)
+    btSortCols.splice(idx, 1);
+  }
+  renderBudtenderTable();
+}
+
+function btSortArrow(key) {
+  const s = btSortCols.find(c => c.key === key);
+  if (!s) return '';
+  const priority = btSortCols.length > 1 ? `<span style="font-size:9px;opacity:0.5;margin-left:2px">${btSortCols.indexOf(s)+1}</span>` : '';
+  return `<span style="margin-left:4px;color:var(--accent)">${s.dir === 'desc' ? '▼' : '▲'}</span>${priority}`;
+}
+
+function btGetValue(e, key) {
+  switch(key) {
+    case 'name': return (e.name || '').toLowerCase();
+    case 'transactions': return e.transactions || 0;
+    case 'net_sales': return e.net_sales || 0;
+    case 'avg_basket': return e.avg_basket || 0;
+    case 'ipt': return e.transactions > 0 ? e.items / e.transactions : 0;
+    case 'share': return btTotalSales > 0 ? e.net_sales / btTotalSales : 0;
+    default: return 0;
+  }
+}
+
+function renderBudtenderTable() {
+  const el = document.getElementById('btContent');
+  if (!btRawData.length) { el.innerHTML = '<div class="loading">NO BUDTENDER DATA FOR LAST WEEK</div>'; return; }
+
+  // Sort: apply multi-column sort (first sort key = highest priority)
+  let sorted = [...btRawData];
+  if (btSortCols.length > 0) {
+    sorted.sort((a, b) => {
+      for (const { key, dir } of btSortCols) {
+        const va = btGetValue(a, key), vb = btGetValue(b, key);
+        let cmp = 0;
+        if (typeof va === 'string') cmp = va.localeCompare(vb);
+        else cmp = va - vb;
+        if (cmp !== 0) return dir === 'asc' ? cmp : -cmp;
+      }
+      return 0;
+    });
+  }
+
+  const cols = [
+    { key: 'name', label: 'BUDTENDER' },
+    { key: 'transactions', label: 'TRANSACTIONS' },
+    { key: 'net_sales', label: 'NET SALES' },
+    { key: 'avg_basket', label: 'AVG BASKET' },
+    { key: 'ipt', label: 'ITEMS/TXN' },
+    { key: 'share', label: 'SHARE' },
+  ];
+
+  let html = `<table class="data-table"><thead><tr><th>#</th>`;
+  cols.forEach(c => {
+    const isActive = btSortCols.some(s => s.key === c.key);
+    html += `<th style="cursor:pointer;user-select:none;${isActive ? 'color:var(--accent)' : ''}" onclick="btToggleSort('${c.key}')">${c.label}${btSortArrow(c.key)}</th>`;
+  });
+  html += `</tr></thead><tbody>`;
+
+  sorted.forEach((e, i) => {
+    const share = btTotalSales > 0 ? (e.net_sales / btTotalSales * 100).toFixed(1) : 0;
+    const ipt = e.transactions > 0 ? (e.items / e.transactions).toFixed(1) : 0;
+    html += `<tr>
+      <td style="font-weight:700;color:var(--accent)">${i+1}</td>
+      <td style="font-weight:600">${e.name}</td>
+      <td>${e.transactions}</td>
+      <td style="font-weight:700">${fmtK(e.net_sales)}</td>
+      <td>${fmt(e.avg_basket)}</td>
+      <td>${ipt}</td>
+      <td>${share}%</td>
+    </tr>`;
+  });
+
+  html += `</tbody></table>`;
+  el.innerHTML = html;
+}
+
 async function loadBudtenders(storeId) {
   const el = document.getElementById('btContent');
   el.innerHTML = '<div class="loading">LOADING BUDTENDER DATA</div>';
+  btSortCols = []; // reset sort on store change
 
   try {
     const lw = dashboardData?.meta?.dateRanges?.lastWeek;
     const data = await api(`/api/employees?store=${storeId}&start=${lw.start}&end=${lw.end}`);
-    const emps = data.employees || [];
-
-    if (emps.length === 0) {
-      el.innerHTML = '<div class="loading">NO BUDTENDER DATA FOR LAST WEEK</div>';
-      return;
-    }
-
-    const totalSales = emps.reduce((s, e) => s + e.net_sales, 0);
-
-    el.innerHTML = `
-      <table class="data-table">
-        <thead><tr>
-          <th>#</th><th>BUDTENDER</th><th>TRANSACTIONS</th><th>NET SALES</th><th>AVG BASKET</th><th>ITEMS/TXN</th><th>SHARE</th>
-        </tr></thead>
-        <tbody>
-          ${emps.map((e, i) => {
-            const share = totalSales > 0 ? (e.net_sales / totalSales * 100).toFixed(1) : 0;
-            const ipt = e.transactions > 0 ? (e.items / e.transactions).toFixed(1) : 0;
-            return `<tr>
-              <td style="font-weight:700;color:var(--accent)">${i+1}</td>
-              <td style="font-weight:600">${e.name}</td>
-              <td>${e.transactions}</td>
-              <td style="font-weight:700">${fmtK(e.net_sales)}</td>
-              <td>${fmt(e.avg_basket)}</td>
-              <td>${ipt}</td>
-              <td>${share}%</td>
-            </tr>`;
-          }).join('')}
-        </tbody>
-      </table>
-    `;
+    btRawData = data.employees || [];
+    btTotalSales = btRawData.reduce((s, e) => s + e.net_sales, 0);
+    renderBudtenderTable();
   } catch (e) {
     el.innerHTML = `<div class="loading" style="color:var(--red)">ERROR: ${e.message}</div>`;
   }
