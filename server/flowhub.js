@@ -213,6 +213,30 @@ loadWeekCache();
 function weekCacheKey(id, ws) { return `${id}:${ws}`; }
 function isWeekCompleted(w) { return w.end < todayPacific(); }
 
+// ── Trend for single store (used by rebuild worker) ──────────
+async function getTrendForStore(loc, weeks) {
+  const unc = weeks.filter(w => !(isWeekCompleted(w) && _weekCache[weekCacheKey(loc.importId, w.start)]));
+  if (unc.length === 0) {
+    return weeks.map(w => _weekCache[weekCacheKey(loc.importId, w.start)]);
+  }
+  if (unc.length === 1 && !isWeekCompleted(unc[0])) {
+    const trend = weeks.map(w => { const ck = weekCacheKey(loc.importId, w.start); return (isWeekCompleted(w) && _weekCache[ck]) ? _weekCache[ck] : null; });
+    try {
+      const cw = unc[0], { orders } = await getOrdersForLocation(loc.importId, cw.start, cw.end);
+      trend[weeks.findIndex(w => w.start === cw.start)] = { week: cw, summary: summarizeOrders(orders), error: null };
+    } catch (e) {
+      trend[weeks.findIndex(w => w.start === unc[0].start)] = { week: unc[0], summary: null, error: e.message };
+    }
+    return trend;
+  }
+  const trend = await streamBucketFetch(loc.importId, weeks[0].start, weeks[weeks.length - 1].end, weeks);
+  for (const e of trend) {
+    if (isWeekCompleted(e.week) && e.summary?.net_sales > 0) _weekCache[weekCacheKey(loc.importId, e.week.start)] = e;
+  }
+  saveWeekCache();
+  return trend;
+}
+
 // ── Trend (all stores) ────────────────────────────────────────
 async function getAllStoresWeeklyTrend(weeksBack = 12) {
   const locs = await getLocations(), weeks = Array.from({ length: weeksBack }, (_, i) => weekRange(weeksBack - 1 - i)), results = [];
@@ -297,4 +321,4 @@ async function getSingleDayVsDay(dow, weeksBack = 4) {
   return { dow, dayName: dn[dow], dates: dd };
 }
 
-module.exports = { getLocations, getOrdersForLocation, summarizeOrders, extractTopProducts, getAllStoresSales, getWeeklyTrend, getAllStoresWeeklyTrend, getDashboardData, getRawOrderSample, getSingleDayVsDay, weekRange, todayRange, ytdRange, toDateStr, STORE_CONFIG };
+module.exports = { getLocations, getOrdersForLocation, summarizeOrders, extractTopProducts, getAllStoresSales, getWeeklyTrend, getAllStoresWeeklyTrend, getTrendForStore, getDashboardData, getRawOrderSample, getSingleDayVsDay, weekRange, todayRange, ytdRange, toDateStr, STORE_CONFIG };

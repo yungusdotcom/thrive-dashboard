@@ -480,7 +480,29 @@ async function loadDashboard() {
 
 async function loadTrend() {
   try {
-    trendData = await api('/api/trend?weeks=12');
+    const raw = await api('/api/trend?weeks=12');
+
+    // Handle "building" status — show loading, retry in 10s
+    if (raw.status === 'building') {
+      document.getElementById('trendChart').innerHTML = '<div class="loading">BUILDING TREND CACHE... REFRESH IN ~60s</div>';
+      setTimeout(loadTrend, 10000);
+      return;
+    }
+
+    // Normalize Redis format → array of { store, trend }
+    if (raw.stores && !Array.isArray(raw)) {
+      trendData = Object.entries(raw.stores).map(([id, st]) => ({
+        store: { id, name: st.name, color: st.color },
+        trend: (st.weeks || []).map(w => ({
+          week: { start: w.week, end: w.weekEnd },
+          summary: w.summary,
+          error: w.error,
+        })),
+      }));
+    } else {
+      trendData = raw; // old array format
+    }
+
     renderTrendChart();
     renderHeatmap();
     renderVelocity();

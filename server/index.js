@@ -1,6 +1,7 @@
 // server/index.js
 // ============================================================
 // Thrive Dashboard — Express Server
+// Redis-backed stale-while-revalidate caching
 // ============================================================
 
 require('dotenv').config();
@@ -9,6 +10,8 @@ const cors       = require('cors');
 const path       = require('path');
 const NodeCache  = require('node-cache');
 const fh         = require('./flowhub');
+const redis      = require('./redis');
+const rebuild    = require('./rebuild');
 
 const app   = express();
 const cache = new NodeCache({ stdTTL: parseInt(process.env.CACHE_TTL) || 300 });
@@ -29,7 +32,16 @@ function auth(req, res, next) {
   res.status(401).json({ error: 'Unauthorized' });
 }
 
-// ── Cache helper ──────────────────────────────────────────────
+// ── Internal auth (for cron) ──────────────────────────────────
+function internalAuth(req, res, next) {
+  const secret = process.env.INTERNAL_SECRET;
+  if (!secret) return next();
+  const provided = req.headers['x-internal-secret'] || req.query.secret;
+  if (provided === secret) return next();
+  res.status(403).json({ error: 'Forbidden' });
+}
+
+// ── Cache helper (in-memory, for dashboard/non-trend) ─────────
 async function cached(key, ttl, fn) {
   const hit = cache.get(key);
   if (hit !== undefined) return hit;
@@ -41,8 +53,14 @@ async function cached(key, ttl, fn) {
 // ── Routes ────────────────────────────────────────────────────
 
 // Health
-app.get('/health', (req, res) => {
-  res.json({ status: 'ok', uptime: process.uptime(), cacheKeys: cache.keys().length });
+app.get('/health', async (req, res) => {
+  const redisOk = await redis.ping();
+  res.json({
+    status: 'ok',
+    uptime: process.uptime(),
+    cacheKeys: cache.keys().length,
+    redis: redisOk ? 'connected' : 'disconnected',
+  });
 });
 
 // Store list
@@ -55,11 +73,11 @@ app.get('/api/stores', async (req, res) => {
   }
 });
 
-// ★ DIAGNOSTIC — raw order sample so we can see actual field names
+// ★ DIAGNOSTIC — raw order sample
 app.get('/api/diag/order-sample', auth, async (req, res) => {
   try {
     const locations = await fh.getLocations();
-    const loc = locations[0]; // first store
+    const loc = locations[0];
     const sample = await fh.getRawOrderSample(loc.importId);
     res.json({ store: loc.name, ...sample });
   } catch (err) {
@@ -67,7 +85,7 @@ app.get('/api/diag/order-sample', auth, async (req, res) => {
   }
 });
 
-// ★ DIAGNOSTIC — test date range query for a specific store + week
+// ★ DIAGNOSTIC — test date range query
 app.get('/api/diag/date-test', auth, async (req, res) => {
   try {
     const locations = await fh.getLocations();
@@ -90,7 +108,9 @@ app.get('/api/diag/date-test', auth, async (req, res) => {
   }
 });
 
-// Executive dashboard
+// ═══════════════════════════════════════════════════════════════
+// EXECUTIVE DASHBOARD — fetches from Flowhub (today + this week)
+// ═══════════════════════════════════════════════════════════════
 app.get('/api/dashboard', auth, async (req, res) => {
   try {
     const data = await cached('dashboard', 300, () => fh.getDashboardData());
@@ -101,31 +121,112 @@ app.get('/api/dashboard', auth, async (req, res) => {
   }
 });
 
-// Weekly trend — all stores
+// ═══════════════════════════════════════════════════════════════
+// TREND — stale-while-revalidate from Redis
+// NEVER blocks on Flowhub. Reads Redis only.
+// ═══════════════════════════════════════════════════════════════
 app.get('/api/trend', auth, async (req, res) => {
-  const weeks = Math.min(parseInt(req.query.weeks) || 12, 52);
   try {
-    const data = await cached(`trend_all_${weeks}`, 1800, () => fh.getAllStoresWeeklyTrend(weeks));
-    res.json(data);
+    // Try Redis first
+    const redisCached = await rebuild.getCachedTrend();
+
+    if (redisCached) {
+      return res.json({
+        source: 'redis',
+        generatedAt: redisCached.generatedAt,
+        rebuildDurationMs: redisCached.rebuildDurationMs,
+        weekStarts: redisCached.weekStarts,
+        stores: redisCached.stores,
+      });
+    }
+
+    // No Redis cache — try in-memory fallback (old behavior)
+    const weeks = Math.min(parseInt(req.query.weeks) || 12, 52);
+    const memCached = cache.get(`trend_all_${weeks}`);
+    if (memCached) {
+      return res.json(memCached);
+    }
+
+    // Nothing cached anywhere — trigger async rebuild, return building status
+    console.log('Trend: no cache — triggering async rebuild');
+    rebuild.rebuildTrendCache().catch(err =>
+      console.error('Async rebuild failed:', err.message)
+    );
+
+    return res.json({
+      status: 'building',
+      message: 'Trend data is being built. Refresh in ~60 seconds.',
+    });
+
   } catch (err) {
     console.error('Trend error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
 
-// Weekly trend — single store
+// ═══════════════════════════════════════════════════════════════
+// TREND (single store) — tries Redis, falls back to direct
+// ═══════════════════════════════════════════════════════════════
 app.get('/api/trend/:storeId', auth, async (req, res) => {
   const weeks = Math.min(parseInt(req.query.weeks) || 12, 52);
   try {
+    // Try Redis — extract single store from all-stores cache
+    const allCached = await rebuild.getCachedTrend();
+    if (allCached && allCached.stores[req.params.storeId]) {
+      const storeData = allCached.stores[req.params.storeId];
+      const locations = await fh.getLocations();
+      const loc = locations.find(l => l.id === req.params.storeId);
+      return res.json({
+        source: 'redis',
+        store: loc || { id: req.params.storeId, name: storeData.name, color: storeData.color },
+        trend: storeData.weeks.map(w => ({
+          week: { start: w.week, end: w.weekEnd },
+          summary: w.summary,
+          error: w.error,
+        })),
+      });
+    }
+
+    // Fallback: direct Flowhub fetch
     const locations = await fh.getLocations();
     const loc = locations.find(l => l.id === req.params.storeId);
     if (!loc) return res.status(404).json({ error: 'Store not found' });
     const data = await cached(`trend_${loc.id}_${weeks}`, 1800, () => fh.getWeeklyTrend(loc.importId, weeks));
-    res.json({ store: loc, trend: data });
+    res.json({ source: 'direct', store: loc, trend: data });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
+
+// ═══════════════════════════════════════════════════════════════
+// REBUILD — triggered by Railway cron every 5 min
+// ═══════════════════════════════════════════════════════════════
+app.post('/internal/rebuild-trend-cache', internalAuth, async (req, res) => {
+  console.log('→ Rebuild triggered via POST');
+  try {
+    const result = await rebuild.rebuildTrendCache();
+    res.json(result);
+  } catch (err) {
+    console.error('Rebuild endpoint error:', err.message);
+    res.status(500).json({ status: 'error', error: err.message });
+  }
+});
+
+// Also support GET for easy testing
+app.get('/internal/rebuild-trend-cache', internalAuth, async (req, res) => {
+  console.log('→ Rebuild triggered via GET');
+  try {
+    const result = await rebuild.rebuildTrendCache();
+    res.json(result);
+  } catch (err) {
+    console.error('Rebuild endpoint error:', err.message);
+    res.status(500).json({ status: 'error', error: err.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════
+// REMAINING EXISTING ROUTES
+// ═══════════════════════════════════════════════════════════════
 
 // Sales for a date range
 app.get('/api/sales', auth, async (req, res) => {
@@ -209,8 +310,7 @@ app.get('/api/employees', auth, async (req, res) => {
   }
 });
 
-// Day vs Day — compare same weekday across last N weeks
-// ?dow=1 (Monday) &weeks=4
+// Day vs Day
 app.get('/api/day-vs-day', auth, async (req, res) => {
   const dow = parseInt(req.query.dow ?? new Date().getDay());
   const weeks = Math.min(parseInt(req.query.weeks) || 4, 8);
@@ -240,9 +340,28 @@ app.listen(PORT, async () => {
   console.log(`\n🌿 THRIVE DASHBOARD — port ${PORT}\n`);
   try {
     await fh.getLocations();
-    console.log('✓ Ready\n');
+    console.log('✓ Ready');
+
+    // Check Redis
+    const redisOk = await redis.ping();
+    console.log(redisOk ? '✓ Redis connected' : '⚠ Redis not available — trend will use direct fetch fallback');
+
+    // Trigger initial trend cache build if Redis is up and cache is empty
+    if (redisOk) {
+      const existing = await rebuild.getCachedTrend();
+      if (!existing) {
+        console.log('→ No trend cache — triggering initial rebuild...');
+        rebuild.rebuildTrendCache().catch(err =>
+          console.error('Initial rebuild failed:', err.message)
+        );
+      } else {
+        console.log(`✓ Trend cache exists (generated ${existing.generatedAt})`);
+      }
+    }
+
+    console.log('');
   } catch (err) {
-    console.warn('⚠ Location warm-up failed:', err.message);
+    console.warn('⚠ Startup warning:', err.message);
   }
 });
 
