@@ -93,7 +93,7 @@ app.get('/api/diag/date-test', auth, async (req, res) => {
 // Executive dashboard
 app.get('/api/dashboard', auth, async (req, res) => {
   try {
-    const data = await cached('dashboard', 900, () => fh.getDashboardData());
+    const data = await cached('dashboard', 300, () => fh.getDashboardData());
     res.json(data);
   } catch (err) {
     console.error('Dashboard error:', err.message);

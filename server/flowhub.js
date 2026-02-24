@@ -1,17 +1,14 @@
-// server/flowhub.js
-// ============================================================
-// Flowhub API Client — Thrive Cannabis Marketplace
-// Auth: key + clientId headers (no OAuth)
-// Base: https://api.flowhub.co
-// ============================================================
-
+// server/flowhub.js — Thrive Cannabis Marketplace
+// Bulk-fetch: 1 API call per store for full date range, bucket into weeks
 const fetch = require('node-fetch');
+const fs = require('fs');
 
-const BASE   = 'https://api.flowhub.co';
+const BASE       = 'https://api.flowhub.co';
 const CLIENT_ID  = process.env.FLOWHUB_CLIENT_ID;
 const CLIENT_KEY = process.env.FLOWHUB_API_KEY;
+const CACHE_DIR  = process.env.CACHE_DIR || '/tmp';
+const CACHE_FILE = `${CACHE_DIR}/thrive-week-cache.json`;
 
-// ── Store display config ──────────────────────────────────────
 const STORE_CONFIG = [
   { id: 'cactus',   match: 'cactus',      display: 'Cactus',      color: '#00e5a0' },
   { id: 'cheyenne', match: 'cheyenne',    display: 'Cheyenne',    color: '#4db8ff' },
@@ -21,573 +18,227 @@ const STORE_CONFIG = [
   { id: 'sahara',   match: 'sahara',      display: 'Sahara',      color: '#ff4d6d' },
   { id: 'sammy',    match: 'sammy',       display: 'Sammy',       color: '#a8e6cf' },
 ];
-
 const EXCLUDED_KEYWORDS = ['smoke', 'mirrors', 'mbnv', 'cultivation'];
 
-// ── Core GET ──────────────────────────────────────────────────
-async function flowhubGet(path, params = {}) {
-  const url = new URL(`${BASE}${path}`);
-  Object.entries(params).forEach(([k, v]) => {
-    if (v !== undefined && v !== null) url.searchParams.set(k, String(v));
-  });
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+function round2(n) { return Math.round(n * 100) / 100; }
 
-  // Retry loop with exponential backoff for 429/500
-  for (let attempt = 0; attempt < 4; attempt++) {
-    if (attempt > 0) {
-      const delay = Math.min(2000 * Math.pow(2, attempt), 15000);
-      console.log(`  ↻ retry #${attempt} in ${delay}ms...`);
-      await new Promise(r => setTimeout(r, delay));
-    }
+// ── Date helpers (Pacific Time) ──────────────────────────────
+const TZ = 'America/Los_Angeles';
+function todayPacific() { return new Date().toLocaleDateString('en-CA', { timeZone: TZ }); }
+function dowPacific() {
+  const dn = new Date().toLocaleDateString('en-US', { timeZone: TZ, weekday: 'short' });
+  return { Sun:0, Mon:1, Tue:2, Wed:3, Thu:4, Fri:5, Sat:6 }[dn] ?? 0;
+}
+function addDays(ds, n) { const d = new Date(ds+'T12:00:00Z'); d.setDate(d.getDate()+n); return d.toISOString().split('T')[0]; }
+function toDateStr(d) { return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
+function weekRange(wb=0) {
+  const today=todayPacific(), dow=dowPacific(), dsm=(dow+6)%7;
+  const mon=addDays(today,-dsm-(wb*7)); return {start:mon, end:addDays(mon,6)};
+}
+function todayRange() { const d=todayPacific(); return {start:d,end:d}; }
+function ytdRange() { const t=todayPacific(); return {start:`${t.split('-')[0]}-01-01`,end:t}; }
 
-    const res = await fetch(url.toString(), {
-      headers: {
-        'clientId':     CLIENT_ID,
-        'key':          CLIENT_KEY,
-        'Accept':       'application/json',
-        'Content-Type': 'application/json',
-      },
-    });
+// ── Persistent cache ──────────────────────────────────────────
+let _weekCache = {};
+function loadWeekCache() {
+  try { if(fs.existsSync(CACHE_FILE)){_weekCache=JSON.parse(fs.readFileSync(CACHE_FILE,'utf8'));console.log(`✓ ${Object.keys(_weekCache).length} cached weeks loaded`);} }
+  catch(e){console.log('⚠ cache load:',e.message);_weekCache={};}
+}
+let _savePending=false;
+function saveWeekCache() {
+  if(_savePending) return; _savePending=true;
+  setTimeout(()=>{_savePending=false;try{fs.writeFileSync(CACHE_FILE,JSON.stringify(_weekCache),'utf8');console.log(`✓ ${Object.keys(_weekCache).length} weeks saved`);}catch(e){console.log('⚠ cache save:',e.message);}},3000);
+}
+loadWeekCache();
+function wck(id,ws){return `${id}:${ws}`;}
+function isComplete(w){return w.end<todayPacific();}
 
-    if (res.status === 429) {
-      console.log(`⚠ 429 rate limited: ${path}`);
-      continue; // retry with backoff
-    }
-
-    if (res.status === 500 && attempt < 3) {
-      console.log(`⚠ 500 server error: ${path}, retrying...`);
-      continue; // retry with backoff
-    }
-
-    if (!res.ok) {
-      const body = await res.text().catch(() => '');
-      throw new Error(`Flowhub ${res.status} ${path}: ${body.slice(0, 500)}`);
-    }
+// ── Flowhub API ───────────────────────────────────────────────
+let _lastApi=0;
+async function flowhubGet(path, params={}) {
+  const gap=300-(Date.now()-_lastApi); if(gap>0) await sleep(gap); _lastApi=Date.now();
+  const url=new URL(`${BASE}${path}`);
+  Object.entries(params).forEach(([k,v])=>{if(v!=null)url.searchParams.set(k,String(v));});
+  for(let a=0;a<5;a++){
+    if(a>0){const d=Math.min(1500*Math.pow(2,a),20000);console.log(`  ↻ retry#${a} ${d}ms`);await sleep(d);}
+    const res=await fetch(url.toString(),{headers:{'clientId':CLIENT_ID,'key':CLIENT_KEY,'Accept':'application/json','Content-Type':'application/json'}});
+    if(res.status===429){console.log(`⚠ 429: ${path}`);continue;}
+    if(res.status===500&&a<4){console.log(`⚠ 500: ${path}`);continue;}
+    if(!res.ok){const b=await res.text().catch(()=>'');throw new Error(`Flowhub ${res.status} ${path}: ${b.slice(0,200)}`);}
     return res.json();
   }
-
-  throw new Error(`Flowhub: max retries exceeded for ${path}`);
+  throw new Error(`Max retries: ${path}`);
 }
 
 // ── Locations ─────────────────────────────────────────────────
-let _locations = null;
-
+let _locations=null;
 async function getLocations() {
-  if (_locations) return _locations;
-
-  const data = await flowhubGet('/v0/clientsLocations');
-  const raw = Array.isArray(data) ? data : (data.locations || data.data || []);
-
-  if (raw.length > 0) {
-    console.log('RAW LOCATION KEYS:', Object.keys(raw[0]).join(', '));
-  }
-
-  _locations = raw
-    .filter(loc => {
-      const rawName = (loc.locationName || loc.name || '').toLowerCase();
-      return !EXCLUDED_KEYWORDS.some(ex => rawName.includes(ex));
-    })
-    .map(loc => {
-      const rawName = loc.locationName || loc.name || '';
-      const importId = loc.importId || loc.locationId || loc._id || loc.id;
-
-      // Match to our config
-      const cfg = STORE_CONFIG.find(s =>
-        rawName.toLowerCase().includes(s.match)
-      );
-
-      return {
-        importId,
-        rawName,
-        name:  cfg?.display || rawName,
-        id:    cfg?.id || rawName.toLowerCase().replace(/[^a-z]+/g, '_'),
-        color: cfg?.color || '#888',
-      };
-    });
-
-  console.log('✓', _locations.length, 'locations:',
-    _locations.map(l => `${l.name}(${l.importId})`).join(', '));
-
-  return _locations;
-}
-
-// ── Date helpers (Pacific Time — Nevada stores) ──────────────
-const TZ = 'America/Los_Angeles';
-
-// Get today's date string in Pacific time
-function todayPacific() {
-  return new Date().toLocaleDateString('en-CA', { timeZone: TZ }); // yyyy-mm-dd
-}
-
-// Get current day-of-week in Pacific time (0=Sun, 1=Mon, ...6=Sat)
-function dowPacific() {
-  const dayName = new Date().toLocaleDateString('en-US', { timeZone: TZ, weekday: 'short' });
-  return { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 }[dayName] ?? 0;
-}
-
-// Add days to a yyyy-mm-dd string
-function addDays(dateStr, days) {
-  const d = new Date(dateStr + 'T12:00:00Z'); // noon UTC to avoid DST edge cases
-  d.setDate(d.getDate() + days);
-  return d.toISOString().split('T')[0];
-}
-
-function toDateStr(d) {
-  // For Date objects, format as yyyy-mm-dd (assumes the date values are already correct)
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
-}
-
-function weekRange(weeksBack = 0) {
-  const today = todayPacific();
-  const dow = dowPacific();
-  // Monday = start of week. How many days since last Monday?
-  const daysSinceMonday = (dow + 6) % 7; // Mon=0, Tue=1, ...Sun=6
-  const mondayStr = addDays(today, -daysSinceMonday - (weeksBack * 7));
-  const sundayStr = addDays(mondayStr, 6);
-  return { start: mondayStr, end: sundayStr };
-}
-
-function todayRange() {
-  const d = todayPacific();
-  return { start: d, end: d };
-}
-
-function ytdRange() {
-  const today = todayPacific();
-  const year = today.split('-')[0];
-  return { start: `${year}-01-01`, end: today };
+  if(_locations) return _locations;
+  const data=await flowhubGet('/v0/clientsLocations');
+  const raw=Array.isArray(data)?data:(data.locations||data.data||[]);
+  _locations=raw.filter(l=>{const n=(l.displayName||l.name||'').toLowerCase();return !EXCLUDED_KEYWORDS.some(kw=>n.includes(kw));})
+    .map(l=>{const n=(l.displayName||l.name||'').toLowerCase();const c=STORE_CONFIG.find(s=>n.includes(s.match));
+      return {importId:l.importId,id:c?.id||l.importId,name:c?.display||l.displayName||l.name,color:c?.color||'#888',rawName:l.displayName||l.name};});
+  console.log('✓',_locations.length,'locations');return _locations;
 }
 
 // ── Fetch orders ──────────────────────────────────────────────
-let _schemaLogged = false;
-
-// Global rate limiter: ensure minimum gap between ANY Flowhub API call
-let _lastApiCall = 0;
-const MIN_API_GAP_MS = 400; // ~2.5 req/sec max
-
-async function rateLimitedGet(path, params) {
-  const now = Date.now();
-  const wait = Math.max(0, MIN_API_GAP_MS - (now - _lastApiCall));
-  if (wait > 0) await sleep(wait);
-  _lastApiCall = Date.now();
-  return flowhubGet(path, params);
-}
-
+let _schemaLogged=false;
 async function getOrdersForLocation(importId, startDate, endDate) {
-  const start = startDate.split('T')[0];
-  const end   = endDate.split('T')[0];
-  const PAGE_SIZE = 500;
-  let page = 1;
-  let allOrders = [];
-  let total = 0;
-
-  while (true) {
-    try {
-      const data = await rateLimitedGet(`/v1/orders/findByLocationId/${importId}`, {
-        created_after:  start,
-        created_before: end,
-        page_size:      PAGE_SIZE,
-        page,
-        order_by:       'asc',
-      });
-
-      const batch = data.orders || [];
-      total = data.total || 0;
-      allOrders = allOrders.concat(batch);
-
-      // Log schema once
-      if (!_schemaLogged && batch.length > 0) {
-        _schemaLogged = true;
-        const sample = batch[0];
-        console.log('\n═══ ORDER SCHEMA DISCOVERY ═══');
-        console.log('ORDER KEYS:', Object.keys(sample).join(', '));
-        for (const [k, v] of Object.entries(sample)) {
-          if (k === 'itemsInCart') continue;
-          const val = typeof v === 'object' ? JSON.stringify(v) : String(v);
-          console.log(`  ${k}: ${val.slice(0, 120)}`);
-        }
-        if (sample.itemsInCart && sample.itemsInCart.length > 0) {
-          const item = sample.itemsInCart[0];
-          console.log('\nITEM KEYS:', Object.keys(item).join(', '));
-          for (const [k, v] of Object.entries(item)) {
-            const val = typeof v === 'object' ? JSON.stringify(v) : String(v);
-            console.log(`  ${k}: ${val.slice(0, 200)}`);
-          }
-        }
-        console.log('═══ END SCHEMA ═══\n');
-      }
-
-      if (allOrders.length >= total || batch.length < PAGE_SIZE) break;
-      page++;
-    } catch (err) {
-      console.error(`✗ Fetch error ${importId.slice(0,8)} ${start}→${end} p${page}: ${err.message}`);
-      break; // return what we have
-    }
+  const start=startDate.split('T')[0], end=endDate.split('T')[0];
+  let page=1, allOrders=[], total=0;
+  while(true){
+    try{
+      const data=await flowhubGet(`/v1/orders/findByLocationId/${importId}`,{created_after:start,created_before:end,page_size:500,page,order_by:'asc'});
+      const batch=data.orders||[];total=data.total||0;allOrders=allOrders.concat(batch);
+      if(!_schemaLogged&&batch.length>0){_schemaLogged=true;console.log('ORDER KEYS:',Object.keys(batch[0]).join(', '));}
+      if(allOrders.length>=total||batch.length<500) break; page++;
+    }catch(err){console.error(`✗ ${importId.slice(0,8)} ${start}→${end} p${page}: ${err.message}`);break;}
   }
-
-  if (allOrders.length === 0 && total === 0) {
-    console.log(`⚠ 0 orders: ${importId.slice(0,8)} ${start}→${end}`);
-  }
-
-  return { total: allOrders.length, orders: allOrders };
+  return {total:allOrders.length, orders:allOrders};
 }
 
-// ── Summarize orders → KPIs ───────────────────────────────────
-// Flowhub schema (confirmed from live API):
-//   Order: { budtender, customerType, orderStatus, totals: { finalTotal, subTotal, totalDiscounts, totalFees, totalTaxes } }
-//   Item:  { totalPrice (gross), totalDiscounts (flat number), totalCost, unitPrice, quantity, category, brand, productName, type }
-//   Pre-tax net sales per item = totalPrice - totalDiscounts
+// ── Summarize ─────────────────────────────────────────────────
 function summarizeOrders(orders) {
-  if (!orders || !orders.length) {
-    return {
-      transaction_count: 0, net_sales: 0, gross_sales: 0,
-      avg_basket: 0, total_items: 0,
-      categories: [], budtenders: [],
-      customer_types: { rec: 0, med: 0 },
-    };
-  }
-
-  let net_sales = 0;
-  let gross_sales = 0;
-  let total_items = 0;
-  const catMap = {};
-  const btMap = {};
-  const ctypes = { rec: 0, med: 0 };
-
-  orders.forEach(order => {
-    // Skip voided orders
-    if (order.voided === true || order.orderStatus === 'voided') return;
-
-    // Customer type
-    const ctype = (order.customerType || '').toLowerCase();
-    if (ctype.includes('med')) ctypes.med++;
-    else ctypes.rec++;
-
-    // Budtender
-    const bt = order.budtender || 'Unknown';
-    if (!btMap[bt]) btMap[bt] = { name: bt, transactions: 0, net_sales: 0, items: 0 };
-    btMap[bt].transactions++;
-
-    let orderNet = 0;
-    let orderGross = 0;
-    let orderItems = 0;
-
-    // Iterate items — use item-level totalPrice and totalDiscounts
-    (order.itemsInCart || []).forEach(item => {
-      if (item.voided === true) return;
-
-      const qty = item.quantity || 1;
-      orderItems += qty;
-
-      // Gross = totalPrice (this is unitPrice × quantity, before discounts)
-      const lineGross = Number(item.totalPrice) || (Number(item.unitPrice || 0) * qty);
-
-      // Discount = totalDiscounts (flat number on item, NOT an array)
-      const discount = Number(item.totalDiscounts) || 0;
-
-      // Net = gross - discounts (pre-tax)
-      const lineNet = lineGross - discount;
-
-      orderGross += lineGross;
-      orderNet += lineNet;
-
-      // Category breakdown
-      const cat = item.category || item.type || 'Other';
-      if (!catMap[cat]) catMap[cat] = { name: cat, net_sales: 0, units: 0, transactions: 0 };
-      catMap[cat].net_sales += lineNet;
-      catMap[cat].units += qty;
-      catMap[cat].transactions++;
+  if(!orders||!orders.length) return {transaction_count:0,net_sales:0,gross_sales:0,avg_basket:0,total_items:0,categories:[],budtenders:[],customer_types:{rec:0,med:0}};
+  let ns=0,gs=0,ti=0; const cm={},bm={},ct={rec:0,med:0};
+  orders.forEach(o=>{
+    if(o.voided===true||o.orderStatus==='voided') return;
+    const tp=(o.customerType||'').toLowerCase(); if(tp.includes('med'))ct.med++;else ct.rec++;
+    const bt=o.budtender||'Unknown'; if(!bm[bt])bm[bt]={name:bt,transactions:0,net_sales:0,items:0}; bm[bt].transactions++;
+    let on=0,og=0,oi=0;
+    (o.itemsInCart||[]).forEach(it=>{
+      if(it.voided===true)return; const q=it.quantity||1; oi+=q;
+      const lg=Number(it.totalPrice)||(Number(it.unitPrice||0)*q), ld=Number(it.totalDiscounts)||0;
+      og+=lg; on+=(lg-ld);
+      const cat=it.category||it.type||'Other';
+      if(!cm[cat])cm[cat]={name:cat,net_sales:0,units:0,transactions:0};
+      cm[cat].net_sales+=(lg-ld);cm[cat].units+=q;cm[cat].transactions++;
     });
-
-    net_sales += orderNet;
-    gross_sales += orderGross;
-    total_items += orderItems;
-    btMap[bt].net_sales += orderNet;
-    btMap[bt].items += orderItems;
+    ns+=on;gs+=og;ti+=oi;bm[bt].net_sales+=on;bm[bt].items+=oi;
   });
-
-  const txnCount = orders.length;
-  const avgBasket = txnCount > 0 ? net_sales / txnCount : 0;
-
-  return {
-    transaction_count: txnCount,
-    net_sales:   round2(net_sales),
-    gross_sales: round2(gross_sales),
-    avg_basket:  round2(avgBasket),
-    total_items,
-    customer_types: ctypes,
-    categories: Object.values(catMap).sort((a, b) => b.net_sales - a.net_sales)
-      .map(c => ({ ...c, net_sales: round2(c.net_sales) })),
-    budtenders: Object.values(btMap)
-      .map(b => ({
-        ...b,
-        net_sales: round2(b.net_sales),
-        avg_basket: round2(b.transactions ? b.net_sales / b.transactions : 0),
-      }))
-      .sort((a, b) => b.net_sales - a.net_sales),
-  };
+  const tc=orders.length;
+  return {transaction_count:tc,net_sales:round2(ns),gross_sales:round2(gs),avg_basket:round2(tc>0?ns/tc:0),total_items:ti,customer_types:ct,
+    categories:Object.values(cm).sort((a,b)=>b.net_sales-a.net_sales).map(c=>({...c,net_sales:round2(c.net_sales)})),
+    budtenders:Object.values(bm).map(b=>({...b,net_sales:round2(b.net_sales),avg_basket:round2(b.transactions?b.net_sales/b.transactions:0)})).sort((a,b)=>b.net_sales-a.net_sales)};
 }
-
-function round2(n) { return Math.round(n * 100) / 100; }
 
 // ── Top products ──────────────────────────────────────────────
-function extractTopProducts(orders, limit = 15) {
-  const map = {};
-  orders.forEach(order => {
-    if (order.voided === true) return;
-    (order.itemsInCart || []).forEach(item => {
-      if (item.voided === true) return;
-      const name  = item.productName || item.title1 || 'Unknown';
-      const brand = item.brand || '';
-      const cat   = item.category || item.type || 'Other';
-      const qty   = item.quantity || 1;
-      const gross = Number(item.totalPrice) || 0;
-      const disc  = Number(item.totalDiscounts) || 0;
-      const net   = gross - disc;
-
-      const key = `${name}__${brand}`;
-      if (!map[key]) map[key] = { name, brand, category: cat, units_sold: 0, net_sales: 0, gross_sales: 0, prices: [] };
-      map[key].units_sold += qty;
-      map[key].net_sales += net;
-      map[key].gross_sales += gross;
-      if (item.unitPrice) map[key].prices.push(Number(item.unitPrice));
-    });
-  });
-
-  return Object.values(map)
-    .map(p => ({
-      name: p.name, brand: p.brand, category: p.category,
-      units_sold: p.units_sold,
-      net_sales: round2(p.net_sales),
-      avg_price: p.prices.length ? round2(p.prices.reduce((a, b) => a + b, 0) / p.prices.length) : 0,
-    }))
-    .sort((a, b) => b.net_sales - a.net_sales)
-    .slice(0, limit);
+function extractTopProducts(orders, limit=15) {
+  const m={};
+  orders.forEach(o=>{if(o.voided)return;(o.itemsInCart||[]).forEach(it=>{
+    if(it.voided)return;const nm=it.productName||it.title1||'Unknown',br=it.brand||'',cat=it.category||it.type||'Other',q=it.quantity||1,g=Number(it.totalPrice)||0,d=Number(it.totalDiscounts)||0,k=`${nm}__${br}`;
+    if(!m[k])m[k]={name:nm,brand:br,category:cat,units_sold:0,net_sales:0,prices:[]};m[k].units_sold+=q;m[k].net_sales+=(g-d);if(it.unitPrice)m[k].prices.push(Number(it.unitPrice));
+  });});
+  return Object.values(m).map(p=>({...p,net_sales:round2(p.net_sales),avg_price:p.prices.length?round2(p.prices.reduce((a,b)=>a+b,0)/p.prices.length):0})).sort((a,b)=>b.net_sales-a.net_sales).slice(0,limit);
 }
 
-// ── All stores — sequential to avoid rate limiting ────────────
-async function getAllStoresSales(startDate, endDate) {
-  const locations = await getLocations();
-  const results = [];
-  for (const loc of locations) {
-    try {
-      const { orders } = await getOrdersForLocation(loc.importId, startDate, endDate);
-      results.push({ store: loc, summary: summarizeOrders(orders), orders });
-    } catch (err) {
-      console.error(`getAllStoresSales error for ${loc.name}:`, err.message);
-      results.push({ store: loc, summary: null, orders: [], error: err.message });
+// ── Bucket orders into weeks ──────────────────────────────────
+function bucketOrdersByWeek(orders, weeks) {
+  const bk=weeks.map(w=>({week:w,orders:[]}));
+  orders.forEach(o=>{const d=(o.createdAt||o.completedOn||'').split('T')[0];for(const b of bk){if(d>=b.week.start&&d<=b.week.end){b.orders.push(o);break;}}});
+  return bk.map(b=>({week:b.week,summary:summarizeOrders(b.orders),error:null}));
+}
+
+// ══════════════════════════════════════════════════════════════
+// CORE: getAllStoresWeeklyTrend — bulk fetch
+// First load (empty cache): 7 API calls (1 per store, full range)
+// Cached: 7 API calls (1 per store, current week only)
+// ══════════════════════════════════════════════════════════════
+async function getAllStoresWeeklyTrend(weeksBack=12) {
+  const locs=await getLocations();
+  const weeks=Array.from({length:weeksBack},(_,i)=>weekRange(weeksBack-1-i));
+  const results=[];
+  for(const loc of locs){
+    const comp=weeks.filter(w=>isComplete(w));
+    const cc=comp.filter(w=>_weekCache[wck(loc.importId,w.start)]).length;
+    if(cc===comp.length){
+      console.log(`  ${loc.name}: ${cc} cached → current week only`);
+      const trend=weeks.map(w=>{const ck=wck(loc.importId,w.start);if(isComplete(w)&&_weekCache[ck])return _weekCache[ck];return{week:w,summary:null,error:null};});
+      try{const cw=weeks[weeks.length-1];const{orders}=await getOrdersForLocation(loc.importId,cw.start,cw.end);trend[trend.length-1]={week:cw,summary:summarizeOrders(orders),error:null};}catch(e){console.error(`  ${loc.name} cw: ${e.message}`);}
+      results.push({store:loc,trend});
+    } else {
+      console.log(`  ${loc.name}: ${cc}/${comp.length} cached → bulk fetch`);
+      try{
+        const{orders}=await getOrdersForLocation(loc.importId,weeks[0].start,weeks[weeks.length-1].end);
+        console.log(`    → ${orders.length} orders`);
+        const trend=bucketOrdersByWeek(orders,weeks);
+        let nc=0;trend.forEach(e=>{if(isComplete(e.week)&&e.summary?.net_sales>0){_weekCache[wck(loc.importId,e.week.start)]=e;nc++;}});
+        if(nc>0)saveWeekCache();
+        results.push({store:loc,trend});
+      }catch(e){console.error(`  ${loc.name} bulk: ${e.message}`);results.push({store:loc,trend:weeks.map(w=>({week:w,summary:null,error:e.message}))});}
     }
   }
   return results;
 }
 
-// ── Permanent cache for completed weeks (never changes) ──────
-// Key format: "locationId:weekStart" → { week, summary }
-const _weekCache = {};
-
-function weekCacheKey(importId, weekStart) {
-  return `${importId}:${weekStart}`;
-}
-
-// Check if a week is completed (its end date is before today)
-function isWeekCompleted(week) {
-  const today = toDateStr(new Date());
-  return week.end < today;
-}
-
-// ── Weekly trend — uses permanent cache for old weeks ────────
-async function getWeeklyTrend(importId, weeksBack = 12) {
-  const weeks = Array.from({ length: weeksBack }, (_, i) => weekRange(weeksBack - 1 - i));
-  const results = [];
-
-  for (const w of weeks) {
-    const cacheKey = weekCacheKey(importId, w.start);
-
-    // If completed week is in cache, use it instantly
-    if (isWeekCompleted(w) && _weekCache[cacheKey]) {
-      results.push(_weekCache[cacheKey]);
-      continue;
-    }
-
-    // Otherwise fetch it
-    try {
-      const { orders } = await getOrdersForLocation(importId, w.start, w.end);
-      const entry = { week: w, summary: summarizeOrders(orders), error: null };
-      results.push(entry);
-
-      // Permanently cache completed weeks
-      if (isWeekCompleted(w) && entry.summary && entry.summary.net_sales > 0) {
-        _weekCache[cacheKey] = entry;
-      }
-    } catch (err) {
-      console.error(`Trend error week ${w.start}: ${err.message}`);
-      results.push({ week: w, summary: null, error: err.message });
-    }
+async function getWeeklyTrend(importId, weeksBack=12) {
+  const weeks=Array.from({length:weeksBack},(_,i)=>weekRange(weeksBack-1-i));
+  const comp=weeks.filter(w=>isComplete(w));
+  if(comp.every(w=>_weekCache[wck(importId,w.start)])){
+    const trend=weeks.map(w=>{const ck=wck(importId,w.start);if(isComplete(w)&&_weekCache[ck])return _weekCache[ck];return{week:w,summary:null,error:null};});
+    try{const cw=weeks[weeks.length-1];const{orders}=await getOrdersForLocation(importId,cw.start,cw.end);trend[trend.length-1]={week:cw,summary:summarizeOrders(orders),error:null};}catch(e){}
+    return trend;
   }
-
-  return results;
+  const{orders}=await getOrdersForLocation(importId,weeks[0].start,weeks[weeks.length-1].end);
+  const trend=bucketOrdersByWeek(orders,weeks);
+  trend.forEach(e=>{if(isComplete(e.week)&&e.summary?.net_sales>0)_weekCache[wck(importId,e.week.start)]=e;});
+  saveWeekCache(); return trend;
 }
 
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-
-async function getAllStoresWeeklyTrend(weeksBack = 12) {
-  const locations = await getLocations();
-  const results = [];
-
-  for (const loc of locations) {
-    try {
-      // Count how many weeks are already cached for this store
-      const weeks = Array.from({ length: weeksBack }, (_, i) => weekRange(weeksBack - 1 - i));
-      const cached = weeks.filter(w => _weekCache[weekCacheKey(loc.importId, w.start)] && isWeekCompleted(w)).length;
-      const toFetch = weeksBack - cached;
-      console.log(`  Fetching trend: ${loc.name} (${cached} cached, ${toFetch} to fetch)...`);
-
-      const trend = await getWeeklyTrend(loc.importId, weeksBack);
-      results.push({ store: loc, trend });
-    } catch (err) {
-      console.error(`Trend failed for ${loc.name}:`, err.message);
-      results.push({ store: loc, trend: [], error: err.message });
-    }
-  }
-
-  return results;
-}
-
-// ── Full dashboard payload ────────────────────────────────────
+// ── Dashboard: 1 call per store ───────────────────────────────
 async function getDashboardData() {
-  const tw = weekRange(0);
-  const lw = weekRange(1);
-  const td = todayRange();
-
-  // Sequential to avoid rate limiting
-  console.log('Fetching today...');
-  const todayData = await getAllStoresSales(td.start, td.end);
-  console.log('Fetching this week...');
-  const thisWeek = await getAllStoresSales(tw.start, tw.end);
-  console.log('Fetching last week...');
-  const lastWeek = await getAllStoresSales(lw.start, lw.end);
-
-  const locations = await getLocations();
-
-  return {
-    meta: {
-      fetchedAt: new Date().toISOString(),
-      dateRanges: { thisWeek: tw, lastWeek: lw, today: td, ytd: ytdRange() },
-    },
-    stores: locations.map((loc, i) => ({
-      ...loc,
-      thisWeek: thisWeek[i]?.summary || null,
-      lastWeek: lastWeek[i]?.summary || null,
-      today:    todayData[i]?.summary || null,
-    })),
-  };
+  const tw=weekRange(0),lw=weekRange(1),td=todayRange();
+  const locs=await getLocations(); const storeData=[];
+  for(const loc of locs){
+    try{
+      const lwCk=wck(loc.importId,lw.start);
+      let lwS,twO,tdO;
+      if(isComplete(lw)&&_weekCache[lwCk]){
+        lwS=_weekCache[lwCk].summary;
+        const{orders}=await getOrdersForLocation(loc.importId,tw.start,tw.end);
+        twO=orders;tdO=orders.filter(o=>(o.createdAt||'').split('T')[0]===td.start);
+        console.log(`  ${loc.name}: LW cached, TW ${orders.length}`);
+      }else{
+        const{orders}=await getOrdersForLocation(loc.importId,lw.start,tw.end);
+        const lwO=orders.filter(o=>{const d=(o.createdAt||'').split('T')[0];return d>=lw.start&&d<=lw.end;});
+        twO=orders.filter(o=>{const d=(o.createdAt||'').split('T')[0];return d>=tw.start&&d<=tw.end;});
+        tdO=orders.filter(o=>(o.createdAt||'').split('T')[0]===td.start);
+        lwS=summarizeOrders(lwO);
+        console.log(`  ${loc.name}: bulk ${orders.length}`);
+        if(isComplete(lw)&&lwS.net_sales>0){_weekCache[lwCk]={week:lw,summary:lwS,error:null};saveWeekCache();}
+      }
+      storeData.push({...loc,thisWeek:summarizeOrders(twO),lastWeek:lwS,today:summarizeOrders(tdO)});
+    }catch(e){console.error(`  ${loc.name}: ${e.message}`);storeData.push({...loc,thisWeek:null,lastWeek:null,today:null});}
+  }
+  return {meta:{fetchedAt:new Date().toISOString(),dateRanges:{thisWeek:tw,lastWeek:lw,today:td,ytd:ytdRange()}},stores:storeData};
 }
 
-// ── Diagnostic: raw order sample ──────────────────────────────
+async function getAllStoresSales(startDate, endDate) {
+  const locs=await getLocations();const r=[];
+  for(const loc of locs){try{const{orders}=await getOrdersForLocation(loc.importId,startDate,endDate);r.push({store:loc,summary:summarizeOrders(orders),orders});}catch(e){r.push({store:loc,summary:null,orders:[],error:e.message});}}
+  return r;
+}
+
 async function getRawOrderSample(importId) {
-  const td = todayRange();
-  const data = await flowhubGet(`/v1/orders/findByLocationId/${importId}`, {
-    created_after:  td.start,
-    created_before: td.end,
-    page_size:      3,
-    page:           1,
-  });
-  return {
-    total: data.total,
-    sample: (data.orders || []).slice(0, 2),
-  };
+  const td=todayRange();
+  const data=await flowhubGet(`/v1/orders/findByLocationId/${importId}`,{created_after:td.start,created_before:td.end,page_size:3,page:1});
+  return {total:data.total,sample:(data.orders||[]).slice(0,2)};
 }
 
-// ── Day vs Day: last N occurrences of each weekday ───────────
-// Returns data for a specific weekday (0=Sun..6=Sat) going back N weeks
-async function getDayVsDayData(weeksBack = 4) {
-  const locations = await getLocations();
-  const now = new Date();
-  const todayDow = now.getDay(); // 0=Sun, 1=Mon, ...6=Sat
-
-  // Build array of days to query: for each weekday, get the last `weeksBack` occurrences
-  const dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
-  const results = {};
-
-  for (let dow = 0; dow < 7; dow++) {
-    // Find the last `weeksBack` occurrences of this weekday
-    const dates = [];
-    for (let w = 0; w < weeksBack; w++) {
-      const d = new Date(now);
-      // How many days ago was the most recent occurrence of this dow?
-      let daysBack = (todayDow - dow + 7) % 7;
-      if (daysBack === 0 && dow !== todayDow) daysBack = 7; // if same dow but we want previous
-      if (dow === todayDow && w === 0) daysBack = 0; // today
-      else if (dow === todayDow) daysBack = w * 7; // previous same weekday
-      else daysBack = daysBack + (w * 7);
-
-      d.setDate(now.getDate() - daysBack);
-      dates.push(toDateStr(d));
-    }
-
-    // Only include days that are in the past or today
-    const validDates = dates.filter(dt => dt <= toDateStr(now));
-
-    // For each date, fetch all stores sequentially
-    const dayData = [];
-    for (const date of validDates) {
-      console.log(`  Day vs Day: ${dayNames[dow]} ${date}...`);
-      const storeResults = [];
-      for (const loc of locations) {
-        try {
-          const { orders } = await getOrdersForLocation(loc.importId, date, date);
-          storeResults.push({ store: loc, summary: summarizeOrders(orders) });
-        } catch (err) {
-          storeResults.push({ store: loc, summary: null, error: err.message });
-        }
-        await sleep(50); // small delay
-      }
-      dayData.push({ date, stores: storeResults });
-    }
-
-    results[dow] = { dayName: dayNames[dow], dates: dayData };
+async function getSingleDayVsDay(dow, weeksBack=4) {
+  const locs=await getLocations(),today=todayPacific(),tdow=dowPacific();
+  const dn=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  const dates=[];
+  for(let w=0;w<weeksBack;w++){let db=(tdow-dow+7)%7;if(db===0&&w>0)db=7*w;else if(w>0)db+=7*w;const d=addDays(today,-db);if(d<=today)dates.push(d);}
+  const dayData=[];
+  for(const date of dates){
+    console.log(`  DvD: ${dn[dow]} ${date}`);
+    const sr=[];for(const loc of locs){try{const{orders}=await getOrdersForLocation(loc.importId,date,date);sr.push({store:loc,summary:summarizeOrders(orders)});}catch(e){sr.push({store:loc,summary:null,error:e.message});}}
+    dayData.push({date,stores:sr});
   }
-
-  return results;
-}
-
-// Lighter version: just one specific weekday
-async function getSingleDayVsDay(dow, weeksBack = 4) {
-  const locations = await getLocations();
-  const now = new Date();
-  const todayDow = now.getDay();
-  const dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
-
-  const dates = [];
-  for (let w = 0; w < weeksBack; w++) {
-    const d = new Date(now);
-    let daysBack = (todayDow - dow + 7) % 7;
-    if (daysBack === 0 && w > 0) daysBack = 7 * w;
-    else if (w > 0) daysBack += 7 * w;
-    d.setDate(now.getDate() - daysBack);
-    const ds = toDateStr(d);
-    if (ds <= toDateStr(now)) dates.push(ds);
-  }
-
-  const dayData = [];
-  for (const date of dates) {
-    console.log(`  Day vs Day: ${dayNames[dow]} ${date}...`);
-    const storeResults = [];
-    for (const loc of locations) {
-      try {
-        const { orders } = await getOrdersForLocation(loc.importId, date, date);
-        storeResults.push({ store: loc, summary: summarizeOrders(orders) });
-      } catch (err) {
-        storeResults.push({ store: loc, summary: null, error: err.message });
-      }
-      await sleep(50);
-    }
-    dayData.push({ date, stores: storeResults });
-  }
-
-  return { dow, dayName: dayNames[dow], dates: dayData };
+  return {dow,dayName:dn[dow],dates:dayData};
 }
 
 module.exports = {
