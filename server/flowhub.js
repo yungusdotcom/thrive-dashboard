@@ -113,42 +113,51 @@ async function getLocations() {
 // ── Date helpers (Pacific Time — Nevada stores) ──────────────
 const TZ = 'America/Los_Angeles';
 
-function toDateStr(d) {
-  // Format as yyyy-mm-dd in Pacific time
-  return d.toLocaleDateString('en-CA', { timeZone: TZ }); // en-CA gives yyyy-mm-dd
+// Get today's date string in Pacific time
+function todayPacific() {
+  return new Date().toLocaleDateString('en-CA', { timeZone: TZ }); // yyyy-mm-dd
 }
 
-function nowPacific() {
-  // Get current date/time components in Pacific
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: TZ,
-    year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
-  }).formatToParts(new Date());
-  const get = (type) => parts.find(p => p.type === type)?.value;
-  return new Date(`${get('year')}-${get('month')}-${get('day')}T${get('hour')}:${get('minute')}:${get('second')}`);
+// Get current day-of-week in Pacific time (0=Sun, 1=Mon, ...6=Sat)
+function dowPacific() {
+  const dayName = new Date().toLocaleDateString('en-US', { timeZone: TZ, weekday: 'short' });
+  return { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 }[dayName] ?? 0;
+}
+
+// Add days to a yyyy-mm-dd string
+function addDays(dateStr, days) {
+  const d = new Date(dateStr + 'T12:00:00Z'); // noon UTC to avoid DST edge cases
+  d.setDate(d.getDate() + days);
+  return d.toISOString().split('T')[0];
+}
+
+function toDateStr(d) {
+  // For Date objects, format as yyyy-mm-dd (assumes the date values are already correct)
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
 }
 
 function weekRange(weeksBack = 0) {
-  const now = nowPacific();
-  const dow = now.getDay();
-  const mon = new Date(now);
-  mon.setDate(now.getDate() - ((dow + 6) % 7) - weeksBack * 7);
-  mon.setHours(0, 0, 0, 0);
-  const sun = new Date(mon);
-  sun.setDate(mon.getDate() + 6);
-  sun.setHours(23, 59, 59, 999);
-  return { start: toDateStr(mon), end: toDateStr(sun) };
+  const today = todayPacific();
+  const dow = dowPacific();
+  // Monday = start of week. How many days since last Monday?
+  const daysSinceMonday = (dow + 6) % 7; // Mon=0, Tue=1, ...Sun=6
+  const mondayStr = addDays(today, -daysSinceMonday - (weeksBack * 7));
+  const sundayStr = addDays(mondayStr, 6);
+  return { start: mondayStr, end: sundayStr };
 }
 
 function todayRange() {
-  const d = toDateStr(nowPacific());
+  const d = todayPacific();
   return { start: d, end: d };
 }
 
 function ytdRange() {
-  const now = nowPacific();
-  return { start: `${now.getFullYear()}-01-01`, end: toDateStr(now) };
+  const today = todayPacific();
+  const year = today.split('-')[0];
+  return { start: `${year}-01-01`, end: today };
 }
 
 // ── Fetch orders ──────────────────────────────────────────────
