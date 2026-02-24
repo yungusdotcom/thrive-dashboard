@@ -118,7 +118,7 @@ async function streamBucketFetch(importId, startDate, endDate, weeks) {
     // Process & bucket each order immediately
     for (const order of batch) {
       if (order.voided === true || order.orderStatus === 'voided') continue;
-      const d = (order.createdAt || order.completedOn || '').split('T')[0];
+      const d = new Date(order.createdAt || order.completedOn || '').toLocaleDateString('en-CA', { timeZone: TZ });
       let acc = null;
       for (const a of accum) { if (d >= a.week.start && d <= a.week.end) { acc = a; break; } }
       if (!acc) continue;
@@ -261,7 +261,12 @@ async function getDashboardData() {
       let lws = (isWeekCompleted(lw) && _weekCache[lwCK]) ? _weekCache[lwCK].summary : null;
       const { orders } = await getOrdersForLocation(loc.importId, tw.start, tw.end);
       const tws = summarizeOrders(orders);
-      const tds = summarizeOrders(orders.filter(o => (o.createdAt || '').split('T')[0] === td.start));
+      const tds = summarizeOrders(orders.filter(o => {
+        const utc = o.createdAt || o.completedOn || '';
+        if (!utc) return false;
+        const pacificDate = new Date(utc).toLocaleDateString('en-CA', { timeZone: TZ });
+        return pacificDate === td.start;
+      }));
       if (!lws) { console.log(`  ${loc.name}: +last week`); const r = await getOrdersForLocation(loc.importId, lw.start, lw.end); lws = summarizeOrders(r.orders); if (isWeekCompleted(lw) && lws.net_sales > 0) { _weekCache[lwCK] = { week: lw, summary: lws, error: null }; saveWeekCache(); } }
       sd.push({ ...loc, thisWeek: tws, lastWeek: lws, today: tds });
       console.log(`  ✓ ${loc.name}: $${tds.net_sales} today`);
