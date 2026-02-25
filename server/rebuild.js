@@ -158,21 +158,30 @@ async function rebuildStoreDetail(locations, limit) {
   console.log('  [storeDetail] starting...');
   const lw = fh.weekRange(1);
   const pw = fh.weekRange(2); // prior week (2 weeks ago)
+  // 4-week window for hourly heatmap: weeks 1-4 ago
+  const hourlyStart = fh.weekRange(4).start;
+  const hourlyEnd = lw.end;
 
   await Promise.all(
     locations.map(loc => limit(async () => {
       const ts = Date.now();
       try {
-        // Fetch last week orders (for hourly heatmap + category baseline)
-        const lwResult = await fh.getOrdersForLocation(loc.importId, lw.start, lw.end);
-        const lwOrders = lwResult.orders;
+        // Fetch 4 weeks of orders for hourly heatmap
+        const hourlyResult = await fh.getOrdersForLocation(loc.importId, hourlyStart, hourlyEnd);
+        const allOrders = hourlyResult.orders;
 
-        // Fetch prior week orders (for category WoW comparison)
-        const pwResult = await fh.getOrdersForLocation(loc.importId, pw.start, pw.end);
-        const pwOrders = pwResult.orders;
+        // Hourly heatmap from 4-week window
+        const hourly = fh.summarizeHourly(allOrders);
 
-        // Hourly heatmap from last week
-        const hourly = fh.summarizeHourly(lwOrders);
+        // Split orders into LW and PW for category comparison
+        const lwOrders = allOrders.filter(o => {
+          const d = new Date(o.createdAt || o.completedOn || '').toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+          return d >= lw.start && d <= lw.end;
+        });
+        const pwOrders = allOrders.filter(o => {
+          const d = new Date(o.createdAt || o.completedOn || '').toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+          return d >= pw.start && d <= pw.end;
+        });
 
         // Category summaries for both weeks
         const lwSummary = fh.summarizeOrders(lwOrders);
@@ -199,6 +208,7 @@ async function rebuildStoreDetail(locations, limit) {
         const payload = {
           store: { id: loc.id, name: loc.name, color: loc.color },
           hourly,
+          hourlyWeeks: 4,
           categoryTrend,
           lastWeek: lw,
           priorWeek: pw,

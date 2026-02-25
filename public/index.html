@@ -1074,7 +1074,7 @@ async function loadStoreDetail(storeId) {
         return 'rgba(' + r + ',' + g + ',' + b + ',' + (0.15 + intensity * 0.85) + ')';
       };
 
-      extraHtml += '<div class="section-title"><span>◆</span> BUSIEST TIMES — LAST WEEK</div>';
+      extraHtml += '<div class="section-title"><span>◆</span> BUSIEST TIMES — LAST 4 WEEKS (AVG)</div>';
       extraHtml += '<div style="margin-bottom:8px;font-family:var(--mono);font-size:10px;color:var(--muted);">'
         + 'Peak: <span style="color:var(--accent);font-weight:700">' + dayNames[peakDay] + ' ' + fmtHour(peakHour) + '–' + fmtHour(peakHour+1) + '</span> (' + peakTxn + ' txns)'
         + ' &nbsp;·&nbsp; Busiest day: <span style="color:var(--accent);font-weight:700">' + dayNames[busiestDayIdx] + '</span> (' + dayTotals[busiestDayIdx] + ' txns)'
