@@ -166,6 +166,31 @@ async function streamBucketFetch(importId, startDate, endDate, weeks) {
   }));
 }
 
+// ── Summarize hourly traffic (transactions by hour × day-of-week) ──
+function summarizeHourly(orders) {
+  // grid[dow][hour] = { transactions, net_sales }
+  const grid = {};
+  for (let d = 0; d < 7; d++) { grid[d] = {}; for (let h = 0; h < 24; h++) grid[d][h] = { transactions: 0, net_sales: 0 }; }
+  if (!orders || !orders.length) return grid;
+  orders.forEach(o => {
+    if (o.voided === true || o.orderStatus === 'voided') return;
+    const ts = o.createdAt || o.completedOn || '';
+    if (!ts) return;
+    const dt = new Date(ts);
+    const pacificStr = dt.toLocaleString('en-US', { timeZone: TZ, hour12: false, weekday: 'short', hour: 'numeric' });
+    // parse "Tue, 14" or similar
+    const dow = { Sun:0,Mon:1,Tue:2,Wed:3,Thu:4,Fri:5,Sat:6 }[dt.toLocaleDateString('en-US', { timeZone: TZ, weekday: 'short' })] ?? 0;
+    const hour = parseInt(dt.toLocaleString('en-US', { timeZone: TZ, hour12: false, hour: 'numeric' }));
+    if (hour >= 0 && hour < 24) {
+      let on = 0;
+      (o.itemsInCart || []).forEach(item => { if (!item.voided) { on += (Number(item.totalPrice) || 0) - (Number(item.totalDiscounts) || 0); } });
+      grid[dow][hour].transactions++;
+      grid[dow][hour].net_sales += on;
+    }
+  });
+  return grid;
+}
+
 // ── Summarize orders → KPIs ───────────────────────────────────
 function summarizeOrders(orders) {
   if (!orders || !orders.length) return { transaction_count: 0, net_sales: 0, gross_sales: 0, avg_basket: 0, total_items: 0, categories: [], budtenders: [], customer_types: { rec: 0, med: 0 } };
@@ -321,4 +346,4 @@ async function getSingleDayVsDay(dow, weeksBack = 4) {
   return { dow, dayName: dn[dow], dates: dd };
 }
 
-module.exports = { getLocations, getOrdersForLocation, summarizeOrders, extractTopProducts, getAllStoresSales, getWeeklyTrend, getAllStoresWeeklyTrend, getTrendForStore, getDashboardData, getRawOrderSample, getSingleDayVsDay, weekRange, todayRange, ytdRange, toDateStr, STORE_CONFIG };
+module.exports = { getLocations, getOrdersForLocation, summarizeOrders, summarizeHourly, extractTopProducts, getAllStoresSales, getWeeklyTrend, getAllStoresWeeklyTrend, getTrendForStore, getDashboardData, getRawOrderSample, getSingleDayVsDay, weekRange, todayRange, ytdRange, toDateStr, STORE_CONFIG };

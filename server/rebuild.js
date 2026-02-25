@@ -1,8 +1,8 @@
 // server/rebuild.js
 // ============================================================
 // Background Cache Rebuilder — Thrive Dashboard
-// Builds Redis caches for: trend, day-vs-day, budtenders, dashboard
-// Called on startup (if empty) and on cache miss.
+// Builds Redis caches for: trend, day-vs-day, budtenders,
+// store detail (hourly + categories), dashboard
 // ============================================================
 
 const fh = require('./flowhub');
@@ -10,14 +10,15 @@ const redis = require('./redis');
 
 // ── Keys ─────────────────────────────────────────────────────
 const KEYS = {
-  trend:      'cache:trend:12w',
-  dvd:        (dow) => `cache:dvd:${dow}`,
-  budtenders: (storeId) => `cache:bt:${storeId}`,
-  dashboard:  'cache:dashboard',
-  lock:       'rebuild:lock',
+  trend:       'cache:trend:12w',
+  dvd:         (dow) => `cache:dvd:${dow}`,
+  budtenders:  (storeId) => `cache:bt:${storeId}`,
+  storeDetail: (storeId) => `cache:store:${storeId}`,
+  dashboard:   'cache:dashboard',
+  lock:        'rebuild:lock',
 };
 
-const LOCK_TTL = 180;       // 3 min lock (covers full rebuild)
+const LOCK_TTL = 240;       // 4 min lock
 const CACHE_TTL = 600;      // 10 min TTL
 const CONCURRENCY = 2;
 
@@ -149,6 +150,73 @@ async function rebuildBudtenders(locations, limit) {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// STORE DETAIL REBUILD — hourly heatmap + category trends
+// Fetches last week + prior week orders per store
+// ═══════════════════════════════════════════════════════════════
+async function rebuildStoreDetail(locations, limit) {
+  const t0 = Date.now();
+  console.log('  [storeDetail] starting...');
+  const lw = fh.weekRange(1);
+  const pw = fh.weekRange(2); // prior week (2 weeks ago)
+
+  await Promise.all(
+    locations.map(loc => limit(async () => {
+      const ts = Date.now();
+      try {
+        // Fetch last week orders (for hourly heatmap + category baseline)
+        const lwResult = await fh.getOrdersForLocation(loc.importId, lw.start, lw.end);
+        const lwOrders = lwResult.orders;
+
+        // Fetch prior week orders (for category WoW comparison)
+        const pwResult = await fh.getOrdersForLocation(loc.importId, pw.start, pw.end);
+        const pwOrders = pwResult.orders;
+
+        // Hourly heatmap from last week
+        const hourly = fh.summarizeHourly(lwOrders);
+
+        // Category summaries for both weeks
+        const lwSummary = fh.summarizeOrders(lwOrders);
+        const pwSummary = fh.summarizeOrders(pwOrders);
+
+        // Build category trend: merge LW + PW categories
+        const pwCatMap = {};
+        (pwSummary.categories || []).forEach(c => { pwCatMap[c.name] = c; });
+
+        const categoryTrend = (lwSummary.categories || []).map(cat => {
+          const prev = pwCatMap[cat.name];
+          return {
+            name: cat.name,
+            lw_sales: cat.net_sales,
+            lw_units: cat.units,
+            pw_sales: prev?.net_sales || 0,
+            pw_units: prev?.units || 0,
+            wow_pct: prev?.net_sales > 0
+              ? Math.round(((cat.net_sales - prev.net_sales) / prev.net_sales) * 1000) / 10
+              : null,
+          };
+        });
+
+        const payload = {
+          store: { id: loc.id, name: loc.name, color: loc.color },
+          hourly,
+          categoryTrend,
+          lastWeek: lw,
+          priorWeek: pw,
+          generatedAt: new Date().toISOString(),
+        };
+
+        await redis.setJSON(KEYS.storeDetail(loc.id), payload, CACHE_TTL);
+        console.log(`    ${loc.name}: ${lwOrders.length} LW orders, ${pwOrders.length} PW orders (${Date.now() - ts}ms)`);
+      } catch (err) {
+        console.error(`    ${loc.name}: FAIL ${err.message}`);
+      }
+    }))
+  );
+
+  console.log(`  [storeDetail] done in ${Date.now() - t0}ms`);
+}
+
+// ═══════════════════════════════════════════════════════════════
 // DASHBOARD REBUILD — today + this week + last week
 // ═══════════════════════════════════════════════════════════════
 async function rebuildDashboard() {
@@ -174,7 +242,6 @@ async function rebuildAll() {
   const t0 = Date.now();
   console.log('\n═══ FULL REBUILD: starting ═══');
 
-  // Acquire lock
   const locked = await redis.acquireLock(KEYS.lock, LOCK_TTL);
   if (!locked) {
     console.log('  ⊘ Lock held, skipping');
@@ -185,16 +252,11 @@ async function rebuildAll() {
     const locations = await fh.getLocations();
     const limit = pLimit(CONCURRENCY);
 
-    // Run dashboard first (fastest, most important for instant load)
+    // Order: dashboard (fastest) → trend → store detail → budtenders → dvd (heaviest)
     await rebuildDashboard();
-
-    // Then trend (needed for heatmap, velocity, store detail)
     await rebuildTrend(locations, limit);
-
-    // Then budtenders (last week data, doesn't change)
+    await rebuildStoreDetail(locations, limit);
     await rebuildBudtenders(locations, limit);
-
-    // Finally day-vs-day (7 DOWs, heaviest)
     await rebuildDayVsDay(locations, limit);
 
     const total = Date.now() - t0;
@@ -210,25 +272,27 @@ async function rebuildAll() {
   }
 }
 
-// ── Selective rebuild (just one section) ─────────────────────
+// ── Selective rebuild ────────────────────────────────────────
 async function rebuildSection(section) {
   const locations = await fh.getLocations();
   const limit = pLimit(CONCURRENCY);
 
   switch (section) {
-    case 'trend':      return rebuildTrend(locations, limit);
-    case 'dvd':        return rebuildDayVsDay(locations, limit);
-    case 'budtenders': return rebuildBudtenders(locations, limit);
-    case 'dashboard':  return rebuildDashboard();
-    default:           return { error: 'unknown section' };
+    case 'trend':       return rebuildTrend(locations, limit);
+    case 'dvd':         return rebuildDayVsDay(locations, limit);
+    case 'budtenders':  return rebuildBudtenders(locations, limit);
+    case 'storeDetail': return rebuildStoreDetail(locations, limit);
+    case 'dashboard':   return rebuildDashboard();
+    default:            return { error: 'unknown section' };
   }
 }
 
 // ── Read cached data ─────────────────────────────────────────
-async function getCachedTrend()        { return redis.getJSON(KEYS.trend); }
-async function getCachedDvd(dow)       { return redis.getJSON(KEYS.dvd(dow)); }
-async function getCachedBudtenders(id) { return redis.getJSON(KEYS.budtenders(id)); }
-async function getCachedDashboard()    { return redis.getJSON(KEYS.dashboard); }
+async function getCachedTrend()           { return redis.getJSON(KEYS.trend); }
+async function getCachedDvd(dow)          { return redis.getJSON(KEYS.dvd(dow)); }
+async function getCachedBudtenders(id)    { return redis.getJSON(KEYS.budtenders(id)); }
+async function getCachedStoreDetail(id)   { return redis.getJSON(KEYS.storeDetail(id)); }
+async function getCachedDashboard()       { return redis.getJSON(KEYS.dashboard); }
 
 module.exports = {
   rebuildAll,
@@ -236,6 +300,7 @@ module.exports = {
   getCachedTrend,
   getCachedDvd,
   getCachedBudtenders,
+  getCachedStoreDetail,
   getCachedDashboard,
   KEYS,
 };

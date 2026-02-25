@@ -39,6 +39,7 @@ Disk Cache (completed weeks persisted to /data volume)
 | Heatmap | `GET /api/trend` | `cache:trend:12w` | 12 weeks × 7 stores, weekly buckets |
 | Velocity | `GET /api/trend` | `cache:trend:12w` | Same trend data, different visualization |
 | Stores | `GET /api/trend/:storeId` | Extracted from `cache:trend:12w` | Single store 12-week trend + KPIs from dashboard |
+| Stores (detail) | `GET /api/store-detail/:storeId` | `cache:store:{storeId}` | Hourly traffic heatmap (txns by hour × DOW) + category trends (LW vs PW with WoW%) |
 | Day vs Day | `GET /api/day-vs-day?dow=N` | `cache:dvd:0` through `cache:dvd:6` | All 7 DOWs, 4 weeks back, all stores |
 | Budtenders | `GET /api/employees?store=X` | `cache:bt:{storeId}` | Last week budtender stats per store. Sortable table (multi-column, 3-click cycle: desc → asc → reset) |
 | Custom Range | `GET /api/sales?start=X&end=Y` | In-memory only (5 min) | User-driven date range, not pre-cacheable |
@@ -93,6 +94,7 @@ thrive-dashboard/
 - **getOrdersForLocation()**: Paginated order fetch for short ranges (≤1 week)
 - **streamBucketFetch()**: Memory-efficient streaming fetch for bulk ranges (12 weeks). Processes page-by-page, never holds >500 orders in RAM. Buckets into weekly accumulators on the fly.
 - **summarizeOrders()**: Aggregates orders into KPIs (net sales, gross, avg basket, categories, budtenders, customer types)
+- **summarizeHourly()**: Builds hour × day-of-week grid from order timestamps (converted to Pacific time). Returns transaction count and net sales per cell.
 - **getTrendForStore()**: Per-store trend fetch used by rebuild worker. Uses disk cache for completed weeks.
 - **Date helpers**: All dates computed in Pacific Time (`America/Los_Angeles`). Order timestamps converted from UTC to Pacific before bucketing.
 
@@ -103,13 +105,14 @@ thrive-dashboard/
 - `ping()` — health check
 
 ### server/rebuild.js
-- **rebuildAll()**: Acquires lock → rebuilds dashboard → trend → budtenders → day-vs-day. Sequential by section, concurrent within section (2 stores at a time).
-- **rebuildSection(name)**: Rebuild a single section on demand
+- **rebuildAll()**: Acquires lock → rebuilds dashboard → trend → store detail → budtenders → day-vs-day. Sequential by section, concurrent within section (2 stores at a time).
+- **rebuildSection(name)**: Rebuild a single section on demand: `trend`, `dvd`, `budtenders`, `storeDetail`, `dashboard`
 - **rebuildTrend()**: 12 weeks × 7 stores. Uses disk cache for completed weeks, only fetches current week fresh.
 - **rebuildDayVsDay()**: All 7 DOWs × 4 weeks × 7 stores
+- **rebuildStoreDetail()**: All stores — fetches last week + prior week orders. Builds hourly traffic heatmap (transactions by hour × day-of-week in Pacific time) and category WoW trends.
 - **rebuildBudtenders()**: All stores, last week orders → budtender summaries
 - **rebuildDashboard()**: Today + this week + last week for all stores
-- Cache readers: `getCachedTrend()`, `getCachedDvd(dow)`, `getCachedBudtenders(id)`, `getCachedDashboard()`
+- Cache readers: `getCachedTrend()`, `getCachedDvd(dow)`, `getCachedBudtenders(id)`, `getCachedStoreDetail(id)`, `getCachedDashboard()`
 
 ### server/index.js
 - Express server with auth middleware (optional `DASHBOARD_PASSWORD`)

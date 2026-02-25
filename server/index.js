@@ -233,6 +233,25 @@ app.get('/api/employees', auth, async (req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════════════
+// STORE DETAIL — hourly heatmap + category trends from Redis
+// ═══════════════════════════════════════════════════════════════
+app.get('/api/store-detail/:storeId', auth, async (req, res) => {
+  try {
+    const redisCached = await rebuild.getCachedStoreDetail(req.params.storeId);
+    if (redisCached) {
+      return res.json({ ...redisCached, source: 'redis' });
+    }
+
+    // Trigger rebuild
+    triggerRebuild('storeDetail');
+    return res.json({ status: 'building', message: 'Store detail is being built.' });
+  } catch (err) {
+    console.error('Store detail error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════
 // REMAINING ROUTES (no Redis caching — user-driven queries)
 // ═══════════════════════════════════════════════════════════════
 
