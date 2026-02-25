@@ -349,17 +349,42 @@ header { display:flex; justify-content:space-between; align-items:flex-end; marg
 
   <!-- TAB: CUSTOM RANGE -->
   <div id="tab-range" class="tab-content" style="display:none">
-    <div class="section-title"><span>◆</span> CUSTOM DATE RANGE REPORT</div>
-    <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-bottom:20px;">
-      <input type="date" id="rangeStart" style="background:var(--surface);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:8px 12px;border-radius:2px;">
-      <span style="color:var(--muted);font-family:var(--mono);font-size:11px;">→</span>
-      <input type="date" id="rangeEnd" style="background:var(--surface);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:8px 12px;border-radius:2px;">
-      <button onclick="runCustomRange()" style="background:var(--accent);color:#000;border:none;font-family:var(--mono);font-size:11px;letter-spacing:2px;padding:8px 20px;cursor:pointer;font-weight:700;border-radius:2px;">RUN REPORT</button>
+    <div class="section-title"><span>◆</span> CUSTOM RANGE — COMPARE & ANALYZE</div>
+
+    <!-- Range A -->
+    <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:12px;">
+      <div style="flex:1;min-width:280px;">
+        <div style="font-family:var(--mono);font-size:9px;letter-spacing:2px;color:var(--accent);margin-bottom:6px;font-weight:700;">RANGE A (PRIMARY)</div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+          <input type="date" id="rangeAStart" style="background:var(--surface);border:1px solid var(--accent);color:var(--text);font-family:var(--mono);font-size:12px;padding:8px 12px;border-radius:2px;">
+          <span style="color:var(--muted);font-family:var(--mono);font-size:11px;">→</span>
+          <input type="date" id="rangeAEnd" style="background:var(--surface);border:1px solid var(--accent);color:var(--text);font-family:var(--mono);font-size:12px;padding:8px 12px;border-radius:2px;">
+        </div>
+      </div>
+      <div style="flex:1;min-width:280px;">
+        <div style="font-family:var(--mono);font-size:9px;letter-spacing:2px;color:var(--muted);margin-bottom:6px;font-weight:700;">RANGE B (COMPARE)</div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+          <input type="date" id="rangeBStart" style="background:var(--surface);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:8px 12px;border-radius:2px;">
+          <span style="color:var(--muted);font-family:var(--mono);font-size:11px;">→</span>
+          <input type="date" id="rangeBEnd" style="background:var(--surface);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:8px 12px;border-radius:2px;">
+          <label style="font-family:var(--mono);font-size:10px;color:var(--muted);display:flex;align-items:center;gap:4px;">
+            <input type="checkbox" id="rangeBEnabled" checked style="accent-color:var(--accent);"> Compare
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <!-- Quick presets + Run -->
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:20px;">
+      <button onclick="runCustomRange()" style="background:var(--accent);color:#000;border:none;font-family:var(--mono);font-size:11px;letter-spacing:2px;padding:10px 24px;cursor:pointer;font-weight:700;border-radius:2px;">RUN REPORT</button>
       <button onclick="setQuickRange('week')" class="refresh-btn">THIS WEEK</button>
       <button onclick="setQuickRange('lastweek')" class="refresh-btn">LAST WEEK</button>
       <button onclick="setQuickRange('30d')" class="refresh-btn">LAST 30D</button>
       <button onclick="setQuickRange('ytd')" class="refresh-btn">YTD</button>
+      <button onclick="setQuickRange('lastyear')" class="refresh-btn">LAST YEAR</button>
+      <button onclick="setQuickRange('monthvmonth')" class="refresh-btn">THIS MONTH vs LAST</button>
     </div>
+
     <div id="rangeResults"></div>
   </div>
 
@@ -428,8 +453,19 @@ document.getElementById('loginKey').addEventListener('keydown', e => { if (e.key
 function initDashboard() {
   const now = new Date();
   document.getElementById('headerDate').textContent = now.toLocaleDateString('en-US', { weekday:'long', year:'numeric', month:'long', day:'numeric' }).toUpperCase();
-  document.getElementById('rangeStart').value = now.toISOString().split('T')[0];
-  document.getElementById('rangeEnd').value = now.toISOString().split('T')[0];
+
+  // Custom range defaults: Range A = this week, Range B = last week
+  const todayStr = now.toISOString().split('T')[0];
+  const dowNow = now.getDay();
+  const monA = new Date(now); monA.setDate(now.getDate() - ((dowNow + 6) % 7));
+  const sunA = new Date(monA); sunA.setDate(monA.getDate() + 6);
+  const monB = new Date(monA); monB.setDate(monA.getDate() - 7);
+  const sunB = new Date(monB); sunB.setDate(monB.getDate() + 6);
+  const d2s = d => d.toISOString().split('T')[0];
+  document.getElementById('rangeAStart').value = d2s(monA);
+  document.getElementById('rangeAEnd').value = d2s(sunA);
+  document.getElementById('rangeBStart').value = d2s(monB);
+  document.getElementById('rangeBEnd').value = d2s(sunB);
 
   // Tab navigation
   document.querySelectorAll('#navTabs button').forEach(btn => {
@@ -1313,84 +1349,214 @@ async function loadBudtenders(storeId) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// CUSTOM RANGE TAB
+// CUSTOM RANGE TAB — Compare & Analyze
 // ═══════════════════════════════════════════════════════════════
 function setQuickRange(preset) {
   const now = new Date();
-  const fmt2 = d => d.toISOString().split('T')[0];
+  const d2s = d => d.toISOString().split('T')[0];
+  const dow = now.getDay();
 
-  let start, end;
+  let aStart, aEnd, bStart, bEnd;
+
   if (preset === 'week') {
-    const dow = now.getDay();
     const mon = new Date(now); mon.setDate(now.getDate() - ((dow + 6) % 7));
     const sun = new Date(mon); sun.setDate(mon.getDate() + 6);
-    start = fmt2(mon); end = fmt2(sun);
+    aStart = d2s(mon); aEnd = d2s(sun);
+    const monP = new Date(mon); monP.setDate(mon.getDate() - 7);
+    const sunP = new Date(monP); sunP.setDate(monP.getDate() + 6);
+    bStart = d2s(monP); bEnd = d2s(sunP);
   } else if (preset === 'lastweek') {
-    const dow = now.getDay();
     const mon = new Date(now); mon.setDate(now.getDate() - ((dow + 6) % 7) - 7);
     const sun = new Date(mon); sun.setDate(mon.getDate() + 6);
-    start = fmt2(mon); end = fmt2(sun);
+    aStart = d2s(mon); aEnd = d2s(sun);
+    const monP = new Date(mon); monP.setDate(mon.getDate() - 7);
+    const sunP = new Date(monP); sunP.setDate(monP.getDate() + 6);
+    bStart = d2s(monP); bEnd = d2s(sunP);
   } else if (preset === '30d') {
-    const d = new Date(now); d.setDate(d.getDate() - 30);
-    start = fmt2(d); end = fmt2(now);
+    const s = new Date(now); s.setDate(s.getDate() - 30);
+    aStart = d2s(s); aEnd = d2s(now);
+    const s2 = new Date(s); s2.setDate(s2.getDate() - 30);
+    const e2 = new Date(s); e2.setDate(e2.getDate() - 1);
+    bStart = d2s(s2); bEnd = d2s(e2);
   } else if (preset === 'ytd') {
-    start = now.getFullYear() + '-01-01'; end = fmt2(now);
+    aStart = now.getFullYear() + '-01-01'; aEnd = d2s(now);
+    bStart = (now.getFullYear() - 1) + '-01-01';
+    const lastYearSameDay = new Date(now); lastYearSameDay.setFullYear(now.getFullYear() - 1);
+    bEnd = d2s(lastYearSameDay);
+  } else if (preset === 'lastyear') {
+    const ly = now.getFullYear() - 1;
+    aStart = ly + '-01-01'; aEnd = ly + '-12-31';
+    const ly2 = ly - 1;
+    bStart = ly2 + '-01-01'; bEnd = ly2 + '-12-31';
+  } else if (preset === 'monthvmonth') {
+    const y = now.getFullYear(), m = now.getMonth();
+    aStart = y + '-' + String(m + 1).padStart(2, '0') + '-01'; aEnd = d2s(now);
+    const pm = m === 0 ? 11 : m - 1;
+    const py = m === 0 ? y - 1 : y;
+    const pmDays = new Date(py, pm + 1, 0).getDate();
+    bStart = py + '-' + String(pm + 1).padStart(2, '0') + '-01';
+    bEnd = py + '-' + String(pm + 1).padStart(2, '0') + '-' + String(pmDays).padStart(2, '0');
   }
 
-  document.getElementById('rangeStart').value = start;
-  document.getElementById('rangeEnd').value = end;
+  document.getElementById('rangeAStart').value = aStart;
+  document.getElementById('rangeAEnd').value = aEnd;
+  document.getElementById('rangeBStart').value = bStart;
+  document.getElementById('rangeBEnd').value = bEnd;
+  document.getElementById('rangeBEnabled').checked = true;
   runCustomRange();
 }
 
 async function runCustomRange() {
-  const start = document.getElementById('rangeStart').value;
-  const end = document.getElementById('rangeEnd').value;
+  const aStart = document.getElementById('rangeAStart').value;
+  const aEnd = document.getElementById('rangeAEnd').value;
+  const bEnabled = document.getElementById('rangeBEnabled').checked;
+  const bStart = document.getElementById('rangeBStart').value;
+  const bEnd = document.getElementById('rangeBEnd').value;
   const el = document.getElementById('rangeResults');
-  el.innerHTML = '<div class="loading">RUNNING REPORT</div>';
+
+  if (!aStart || !aEnd) { el.innerHTML = '<div class="loading">SELECT A DATE RANGE</div>'; return; }
+
+  el.innerHTML = '<div class="loading">RUNNING REPORT...</div>';
 
   try {
-    const data = await api(`/api/sales?start=${start}&end=${end}`);
-    const results = Array.isArray(data) ? data : [];
+    const dataA = await api('/api/sales?start=' + aStart + '&end=' + aEnd);
+    const resultsA = Array.isArray(dataA) ? dataA : [];
+    let resultsB = null;
 
-    if (results.length === 0) {
-      el.innerHTML = '<div class="loading">NO DATA FOR THIS RANGE</div>';
-      return;
+    if (bEnabled && bStart && bEnd) {
+      const dataB = await api('/api/sales?start=' + bStart + '&end=' + bEnd);
+      resultsB = Array.isArray(dataB) ? dataB : [];
     }
 
-    const grandTotal = results.reduce((s, r) => s + (r.summary?.net_sales || 0), 0);
-    const grandTxn = results.reduce((s, r) => s + (r.summary?.transaction_count || 0), 0);
+    if (resultsA.length === 0) { el.innerHTML = '<div class="loading">NO DATA FOR RANGE A</div>'; return; }
 
-    let html = `
-      <div class="kpi-row" style="margin-bottom:20px;">
-        <div class="kpi"><div class="label">TOTAL NET SALES</div><div class="value">${fmtK(grandTotal)}</div></div>
-        <div class="kpi"><div class="label">TOTAL TRANSACTIONS</div><div class="value">${grandTxn.toLocaleString()}</div></div>
-        <div class="kpi"><div class="label">AVG BASKET</div><div class="value">${fmt(grandTxn > 0 ? grandTotal / grandTxn : 0)}</div></div>
-        <div class="kpi"><div class="label">PERIOD</div><div class="value" style="font-size:16px">${start} → ${end}</div></div>
-      </div>
-      <table class="data-table">
-        <thead><tr><th>STORE</th><th>NET SALES</th><th>TRANSACTIONS</th><th>AVG BASKET</th><th>ITEMS</th><th>SHARE</th></tr></thead>
-        <tbody>
-    `;
+    // Aggregate totals
+    const aggA = aggregateRange(resultsA);
+    const aggB = resultsB ? aggregateRange(resultsB) : null;
 
-    results.sort((a, b) => (b.summary?.net_sales || 0) - (a.summary?.net_sales || 0));
-    results.forEach(r => {
-      const s = r.summary || {};
-      const share = grandTotal > 0 ? (s.net_sales / grandTotal * 100).toFixed(1) : 0;
-      html += `<tr>
-        <td style="font-weight:600">${r.store?.name || '—'}</td>
-        <td style="font-weight:700">${fmtK(s.net_sales)}</td>
-        <td>${(s.transaction_count || 0).toLocaleString()}</td>
-        <td>${fmt(s.avg_basket)}</td>
-        <td>${(s.total_items || 0).toLocaleString()}</td>
-        <td>${share}%</td>
-      </tr>`;
+    let html = '';
+
+    // ── KPI COMPARISON ──
+    html += '<div class="section-title"><span>◆</span> SUMMARY</div>';
+    html += '<div class="kpi-row">';
+    html += buildCompareKpi('NET SALES', fmtK(aggA.netSales), aggB ? fmtK(aggB.netSales) : null, aggB ? pctChange(aggA.netSales, aggB.netSales) : null);
+    html += buildCompareKpi('TRANSACTIONS', aggA.txns.toLocaleString(), aggB ? aggB.txns.toLocaleString() : null, aggB ? pctChange(aggA.txns, aggB.txns) : null);
+    html += buildCompareKpi('AVG BASKET', fmt(aggA.avgBasket), aggB ? fmt(aggB.avgBasket) : null, aggB ? pctChange(aggA.avgBasket, aggB.avgBasket) : null);
+    html += buildCompareKpi('ITEMS / TXN', aggA.txns > 0 ? (aggA.items / aggA.txns).toFixed(1) : '0', aggB && aggB.txns > 0 ? (aggB.items / aggB.txns).toFixed(1) : null, null);
+    html += '</div>';
+
+    // Period labels
+    html += '<div style="font-family:var(--mono);font-size:9px;color:var(--muted);margin-bottom:16px;">';
+    html += '<span style="color:var(--accent);">A:</span> ' + aStart + ' → ' + aEnd;
+    if (aggB) html += ' &nbsp;|&nbsp; <span style="color:var(--muted);">B:</span> ' + bStart + ' → ' + bEnd;
+    html += '</div>';
+
+    // ── STORE BREAKDOWN ──
+    html += '<div class="section-title"><span>◆</span> STORE BREAKDOWN</div>';
+    html += '<table class="data-table"><thead><tr><th>STORE</th><th>NET SALES (A)</th>';
+    if (aggB) html += '<th>NET SALES (B)</th><th>CHANGE</th>';
+    html += '<th>TXNS (A)</th><th>AVG BASKET (A)</th><th>SHARE</th></tr></thead><tbody>';
+
+    const sortedA = [...resultsA].sort((a, b) => (b.summary?.net_sales || 0) - (a.summary?.net_sales || 0));
+    sortedA.forEach(r => {
+      const sA = r.summary || {};
+      const sB = resultsB ? (resultsB.find(rb => rb.store?.id === r.store?.id)?.summary || {}) : null;
+      const share = aggA.netSales > 0 ? (sA.net_sales / aggA.netSales * 100).toFixed(1) : 0;
+      const ch = sB && sB.net_sales > 0 ? pctChange(sA.net_sales, sB.net_sales) : null;
+      const chColor = ch != null ? (ch >= 0 ? 'var(--green)' : 'var(--red)') : 'var(--muted)';
+      const color = stores.find(s => s.id === r.store?.id)?.color || '#888';
+
+      html += '<tr>';
+      html += '<td style="font-weight:600;"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + color + ';margin-right:6px;"></span>' + (r.store?.name || '—') + '</td>';
+      html += '<td style="font-weight:700;">' + fmtK(sA.net_sales) + '</td>';
+      if (sB !== null) {
+        html += '<td style="color:var(--muted)">' + fmtK(sB.net_sales || 0) + '</td>';
+        html += '<td style="color:' + chColor + ';font-weight:700">' + (ch != null ? pctFmt(ch) : '—') + '</td>';
+      }
+      html += '<td>' + (sA.transaction_count || 0).toLocaleString() + '</td>';
+      html += '<td>' + fmt(sA.avg_basket) + '</td>';
+      html += '<td>' + share + '%</td>';
+      html += '</tr>';
     });
-
     html += '</tbody></table>';
+
+    // ── CATEGORY BREAKDOWN ──
+    if (aggA.categories.length > 0) {
+      html += '<div class="section-title"><span>◆</span> CATEGORY BREAKDOWN</div>';
+      html += '<table class="data-table"><thead><tr><th>CATEGORY</th><th>NET SALES (A)</th>';
+      if (aggB) html += '<th>NET SALES (B)</th><th>CHANGE</th>';
+      html += '<th>UNITS (A)</th><th>SHARE</th></tr></thead><tbody>';
+
+      const catBMap = {};
+      if (aggB) aggB.categories.forEach(c => { catBMap[c.name] = c; });
+
+      aggA.categories.forEach(cat => {
+        const catB = catBMap[cat.name];
+        const share = aggA.netSales > 0 ? (cat.net_sales / aggA.netSales * 100).toFixed(1) : 0;
+        const ch = catB && catB.net_sales > 0 ? pctChange(cat.net_sales, catB.net_sales) : null;
+        const chColor = ch != null ? (ch >= 0 ? 'var(--green)' : 'var(--red)') : 'var(--muted)';
+        const rowBg = ch != null ? (ch >= 10 ? 'rgba(0,229,160,0.06)' : ch <= -10 ? 'rgba(255,77,109,0.06)' : 'transparent') : 'transparent';
+
+        html += '<tr style="background:' + rowBg + '">';
+        html += '<td style="font-weight:600">' + cat.name + '</td>';
+        html += '<td style="font-weight:700">' + fmtK(cat.net_sales) + '</td>';
+        if (aggB) {
+          html += '<td style="color:var(--muted)">' + fmtK(catB?.net_sales || 0) + '</td>';
+          html += '<td style="color:' + chColor + ';font-weight:700">' + (ch != null ? pctFmt(ch) : '—') + '</td>';
+        }
+        html += '<td>' + cat.units + '</td>';
+        html += '<td>' + share + '%</td>';
+        html += '</tr>';
+      });
+      html += '</tbody></table>';
+    }
+
+    // ── CUSTOMER MIX ──
+    html += '<div class="section-title"><span>◆</span> CUSTOMER MIX</div>';
+    html += '<div class="kpi-row">';
+    html += buildCompareKpi('RECREATIONAL', aggA.rec.toLocaleString() + ' (' + (aggA.txns > 0 ? (aggA.rec / aggA.txns * 100).toFixed(0) : 0) + '%)',
+      aggB ? aggB.rec.toLocaleString() + ' (' + (aggB.txns > 0 ? (aggB.rec / aggB.txns * 100).toFixed(0) : 0) + '%)' : null, null);
+    html += buildCompareKpi('MEDICAL', aggA.med.toLocaleString() + ' (' + (aggA.txns > 0 ? (aggA.med / aggA.txns * 100).toFixed(0) : 0) + '%)',
+      aggB ? aggB.med.toLocaleString() + ' (' + (aggB.txns > 0 ? (aggB.med / aggB.txns * 100).toFixed(0) : 0) + '%)' : null, null);
+    html += '</div>';
+
     el.innerHTML = html;
   } catch (e) {
-    el.innerHTML = `<div class="loading" style="color:var(--red)">ERROR: ${e.message}</div>`;
+    el.innerHTML = '<div class="loading" style="color:var(--red)">ERROR: ' + e.message + '</div>';
   }
+}
+
+function aggregateRange(results) {
+  let netSales = 0, grossSales = 0, txns = 0, items = 0, rec = 0, med = 0;
+  const catMap = {};
+
+  results.forEach(r => {
+    const s = r.summary || {};
+    netSales += s.net_sales || 0;
+    grossSales += s.gross_sales || 0;
+    txns += s.transaction_count || 0;
+    items += s.total_items || 0;
+    rec += s.customer_types?.rec || 0;
+    med += s.customer_types?.med || 0;
+    (s.categories || []).forEach(c => {
+      if (!catMap[c.name]) catMap[c.name] = { name: c.name, net_sales: 0, units: 0 };
+      catMap[c.name].net_sales += c.net_sales || 0;
+      catMap[c.name].units += c.units || 0;
+    });
+  });
+
+  return {
+    netSales, grossSales, txns, items, rec, med,
+    avgBasket: txns > 0 ? netSales / txns : 0,
+    categories: Object.values(catMap).sort((a, b) => b.net_sales - a.net_sales),
+  };
+}
+
+function buildCompareKpi(label, valA, valB, change) {
+  let sub = '';
+  if (valB != null) sub += '<div style="font-family:var(--mono);font-size:10px;color:var(--muted);margin-top:4px;">B: ' + valB + '</div>';
+  if (change != null) sub += '<div class="change ' + pctClass(change) + '">' + pctFmt(change) + ' vs B</div>';
+  return '<div class="kpi"><div class="label">' + label + '</div><div class="value">' + valA + '</div>' + sub + '</div>';
 }
 
 // ── Auto-refresh every 5 min ────────────────────────────────
