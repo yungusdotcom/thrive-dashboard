@@ -172,16 +172,19 @@ function summarizeHourly(orders) {
   const grid = {};
   for (let d = 0; d < 7; d++) { grid[d] = {}; for (let h = 0; h < 24; h++) grid[d][h] = { transactions: 0, net_sales: 0 }; }
   if (!orders || !orders.length) return grid;
+
+  const dowMap = { Sunday:0,Monday:1,Tuesday:2,Wednesday:3,Thursday:4,Friday:5,Saturday:6 };
+  const fmt = new Intl.DateTimeFormat('en-US', { timeZone: TZ, weekday: 'long', hour: 'numeric', hour12: false });
+
   orders.forEach(o => {
     if (o.voided === true || o.orderStatus === 'voided') return;
     const ts = o.createdAt || o.completedOn || '';
     if (!ts) return;
-    const dt = new Date(ts);
-    // Extract Pacific hour and DOW reliably
-    const pacificStr = dt.toLocaleString('en-US', { timeZone: TZ });
-    const pacificDt = new Date(pacificStr);
-    const dow = pacificDt.getDay();
-    const hour = pacificDt.getHours();
+    const parts = fmt.formatToParts(new Date(ts));
+    const weekday = parts.find(p => p.type === 'weekday')?.value || '';
+    let hour = parseInt(parts.find(p => p.type === 'hour')?.value || '0');
+    if (hour === 24) hour = 0; // some ICU versions use 24 for midnight
+    const dow = dowMap[weekday] ?? 0;
     let on = 0;
     (o.itemsInCart || []).forEach(item => { if (!item.voided) { on += (Number(item.totalPrice) || 0) - (Number(item.totalDiscounts) || 0); } });
     grid[dow][hour].transactions++;
