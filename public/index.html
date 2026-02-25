@@ -1071,35 +1071,35 @@ async function loadStoreDetail(storeId) {
         const r = Math.round(0 + intensity * 0);
         const g = Math.round(30 + intensity * 199);
         const b = Math.round(40 + intensity * 120);
-        return \`rgba(\${r},\${g},\${b},\${0.15 + intensity * 0.85})\`;
+        return 'rgba(' + r + ',' + g + ',' + b + ',' + (0.15 + intensity * 0.85) + ')';
       };
 
-      extraHtml += \`<div class="section-title"><span>◆</span> BUSIEST TIMES — LAST WEEK</div>\`;
-      extraHtml += \`<div style="margin-bottom:8px;font-family:var(--mono);font-size:10px;color:var(--muted);">
-        Peak: <span style="color:var(--accent);font-weight:700">\${dayNames[peakDay]} \${fmtHour(peakHour)}–\${fmtHour(peakHour+1)}</span> (\${peakTxn} txns)
-        &nbsp;·&nbsp; Busiest day: <span style="color:var(--accent);font-weight:700">\${dayNames[busiestDayIdx]}</span> (\${dayTotals[busiestDayIdx]} txns)
-      </div>\`;
+      extraHtml += '<div class="section-title"><span>◆</span> BUSIEST TIMES — LAST WEEK</div>';
+      extraHtml += '<div style="margin-bottom:8px;font-family:var(--mono);font-size:10px;color:var(--muted);">'
+        + 'Peak: <span style="color:var(--accent);font-weight:700">' + dayNames[peakDay] + ' ' + fmtHour(peakHour) + '–' + fmtHour(peakHour+1) + '</span> (' + peakTxn + ' txns)'
+        + ' &nbsp;·&nbsp; Busiest day: <span style="color:var(--accent);font-weight:700">' + dayNames[busiestDayIdx] + '</span> (' + dayTotals[busiestDayIdx] + ' txns)'
+        + '</div>';
 
-      extraHtml += \`<div class="heatmap-wrap"><table class="data-table" style="text-align:center;"><thead><tr><th></th>\`;
+      extraHtml += '<div class="heatmap-wrap"><table class="data-table" style="text-align:center;"><thead><tr><th></th>';
       for (let h = minHour; h <= maxHour; h++) {
-        extraHtml += \`<th style="font-size:8px;padding:4px 2px;min-width:28px;">\${fmtHour(h)}</th>\`;
+        extraHtml += '<th style="font-size:8px;padding:4px 2px;min-width:28px;">' + fmtHour(h) + '</th>';
       }
-      extraHtml += \`<th style="font-size:8px;padding:4px 6px;">TOTAL</th></tr></thead><tbody>\`;
+      extraHtml += '<th style="font-size:8px;padding:4px 6px;">TOTAL</th></tr></thead><tbody>';
 
       for (let d = 0; d < 7; d++) {
-        extraHtml += \`<tr><td style="font-weight:700;font-size:10px;padding:4px 6px;white-space:nowrap;">\${dayNames[d]}</td>\`;
+        extraHtml += '<tr><td style="font-weight:700;font-size:10px;padding:4px 6px;white-space:nowrap;">' + dayNames[d] + '</td>';
         let daySum = 0;
         for (let h = minHour; h <= maxHour; h++) {
           const t = hourly[d]?.[h]?.transactions || 0;
           daySum += t;
           const bg = heatCellColor(t);
           const isPeak = d === peakDay && h === peakHour;
-          extraHtml += \`<td style="background:\${bg};font-family:var(--mono);font-size:10px;font-weight:\${t > 0 ? '600' : '400'};padding:4px 2px;color:\${t > 0 ? '#fff' : 'var(--muted)'};min-width:28px;\${isPeak ? 'outline:2px solid var(--accent);outline-offset:-2px;' : ''}" title="\${dayNames[d]} \${fmtHour(h)}: \${t} txns">\${t || '·'}</td>\`;
+          extraHtml += '<td style="background:' + bg + ';font-family:var(--mono);font-size:10px;font-weight:' + (t > 0 ? '600' : '400') + ';padding:4px 2px;color:' + (t > 0 ? '#fff' : 'var(--muted)') + ';min-width:28px;' + (isPeak ? 'outline:2px solid var(--accent);outline-offset:-2px;' : '') + '" title="' + dayNames[d] + ' ' + fmtHour(h) + ': ' + t + ' txns">' + (t || '·') + '</td>';
         }
-        extraHtml += \`<td style="font-family:var(--mono);font-size:10px;font-weight:700;padding:4px 6px;">\${daySum}</td></tr>\`;
+        extraHtml += '<td style="font-family:var(--mono);font-size:10px;font-weight:700;padding:4px 6px;">' + daySum + '</td></tr>';
       }
 
-      extraHtml += \`</tbody></table></div>\`;
+      extraHtml += '</tbody></table></div>';
     }
 
     // ── CATEGORY TRENDS — LAST WEEK vs PRIOR WEEK ──
@@ -1107,27 +1107,27 @@ async function loadStoreDetail(storeId) {
       const cats = detail.categoryTrend;
       const totalLW = cats.reduce((s, c) => s + c.lw_sales, 0);
 
-      extraHtml += \`<div class="section-title"><span>◆</span> CATEGORY TRENDS — LAST WEEK vs PRIOR</div>\`;
-      extraHtml += \`<table class="data-table"><thead><tr>
-        <th>CATEGORY</th><th>LAST WEEK</th><th>PRIOR WEEK</th><th>WoW</th><th>UNITS (LW)</th><th>SHARE</th>
-      </tr></thead><tbody>\`;
+      extraHtml += '<div class="section-title"><span>◆</span> CATEGORY TRENDS — LAST WEEK vs PRIOR</div>';
+      extraHtml += '<table class="data-table"><thead><tr>'
+        + '<th>CATEGORY</th><th>LAST WEEK</th><th>PRIOR WEEK</th><th>WoW</th><th>UNITS (LW)</th><th>SHARE</th>'
+        + '</tr></thead><tbody>';
 
       cats.forEach(cat => {
         const share = totalLW > 0 ? (cat.lw_sales / totalLW * 100).toFixed(1) : 0;
         const wowColor = cat.wow_pct != null ? (cat.wow_pct >= 0 ? 'var(--green)' : 'var(--red)') : 'var(--muted)';
         const wowText = cat.wow_pct != null ? (cat.wow_pct >= 0 ? '+' : '') + cat.wow_pct.toFixed(1) + '%' : '—';
         const wowBg = cat.wow_pct != null ? (cat.wow_pct >= 5 ? 'rgba(0,229,160,0.08)' : cat.wow_pct <= -5 ? 'rgba(255,77,109,0.08)' : 'transparent') : 'transparent';
-        extraHtml += \`<tr style="background:\${wowBg}">
-          <td style="font-weight:600">\${cat.name}</td>
-          <td style="font-weight:700">\${fmtK(cat.lw_sales)}</td>
-          <td style="color:var(--muted)">\${fmtK(cat.pw_sales)}</td>
-          <td style="color:\${wowColor};font-weight:700">\${wowText}</td>
-          <td>\${cat.lw_units}</td>
-          <td>\${share}%</td>
-        </tr>\`;
+        extraHtml += '<tr style="background:' + wowBg + '">'
+          + '<td style="font-weight:600">' + cat.name + '</td>'
+          + '<td style="font-weight:700">' + fmtK(cat.lw_sales) + '</td>'
+          + '<td style="color:var(--muted)">' + fmtK(cat.pw_sales) + '</td>'
+          + '<td style="color:' + wowColor + ';font-weight:700">' + wowText + '</td>'
+          + '<td>' + cat.lw_units + '</td>'
+          + '<td>' + share + '%</td>'
+          + '</tr>';
       });
 
-      extraHtml += \`</tbody></table>\`;
+      extraHtml += '</tbody></table>';
     }
 
     extraEl.innerHTML = extraHtml || '<div class="loading" style="color:var(--muted)">NO ADDITIONAL DATA</div>';
