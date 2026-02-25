@@ -177,16 +177,15 @@ function summarizeHourly(orders) {
     const ts = o.createdAt || o.completedOn || '';
     if (!ts) return;
     const dt = new Date(ts);
-    const pacificStr = dt.toLocaleString('en-US', { timeZone: TZ, hour12: false, weekday: 'short', hour: 'numeric' });
-    // parse "Tue, 14" or similar
-    const dow = { Sun:0,Mon:1,Tue:2,Wed:3,Thu:4,Fri:5,Sat:6 }[dt.toLocaleDateString('en-US', { timeZone: TZ, weekday: 'short' })] ?? 0;
-    const hour = parseInt(dt.toLocaleString('en-US', { timeZone: TZ, hour12: false, hour: 'numeric' }));
-    if (hour >= 0 && hour < 24) {
-      let on = 0;
-      (o.itemsInCart || []).forEach(item => { if (!item.voided) { on += (Number(item.totalPrice) || 0) - (Number(item.totalDiscounts) || 0); } });
-      grid[dow][hour].transactions++;
-      grid[dow][hour].net_sales += on;
-    }
+    // Extract Pacific hour and DOW reliably
+    const pacificStr = dt.toLocaleString('en-US', { timeZone: TZ });
+    const pacificDt = new Date(pacificStr);
+    const dow = pacificDt.getDay();
+    const hour = pacificDt.getHours();
+    let on = 0;
+    (o.itemsInCart || []).forEach(item => { if (!item.voided) { on += (Number(item.totalPrice) || 0) - (Number(item.totalDiscounts) || 0); } });
+    grid[dow][hour].transactions++;
+    grid[dow][hour].net_sales += on;
   });
   return grid;
 }
