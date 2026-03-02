@@ -262,19 +262,3 @@ module.exports = {
   getCachedDashboard: getCachedDashboard,
   KEYS: KEYS,
 };
-```
-
-**What changed and why it's faster:**
-
-**Before** (sequential, ~5 min):
-```
-Dashboard (15s) → wait → Trend (45s) → wait → StoreDetail (60s) → wait → Budtenders (40s, DUPLICATE data) → wait → DvD (120s) → done
-```
-
-**After** (parallel, ~90s):
-```
-Dashboard (15s)     ──→ done, writes to Redis immediately
-Trend (45s)         ──→ done, shares concurrency limiter
-StoreData (60s)     ──→ done, writes BOTH storeDetail + budtenders from ONE fetch
-DvD (90s)           ──→ done, 7 DOWs now concurrent instead of sequential
-                    ALL running simultaneously ↑
