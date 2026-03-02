@@ -858,6 +858,10 @@ function renderDayVsDay(data) {
     return dt.toLocaleDateString('en-US', { month:'short', day:'numeric' });
   };
 
+  // Detect if most recent date is today (partial/in-progress)
+  const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+  const isToday = (d) => d === todayStr;
+
   // ── HEATMAP TABLE ──
   let html = '<div class="section-title" style="margin-top:0"><span>◆</span> ' + data.dayName.toUpperCase() + ' — LAST ' + dates.length + ' WEEKS (NET SALES)</div>';
   html += '<div class="heatmap-wrap"><table class="heatmap-table"><thead><tr><th>DATE</th>';
@@ -865,29 +869,39 @@ function renderDayVsDay(data) {
   html += '<th>CO. TOTAL</th><th>vs PREV</th></tr></thead><tbody>';
 
   dates.forEach((day, di) => {
-    html += `<tr><td style="font-weight:700">${fmtDate(day.date)}</td>`;
+    const partial = isToday(day.date);
+    const dateLabel = fmtDate(day.date) + (partial ? ' *' : '');
+    html += `<tr${partial ? ' style="opacity:0.6"' : ''}><td style="font-weight:700">${dateLabel}</td>`;
     let dayTotal = 0;
     let prevDayTotal = 0;
 
     day.stores.forEach((st, si) => {
       const val = st.summary?.net_sales || 0;
       const prev = di < dates.length - 1 ? (dates[di + 1]?.stores[si]?.summary?.net_sales || 0) : null;
-      const change = prev != null ? pctChange(val, prev) : null;
+      const change = (!partial && prev != null) ? pctChange(val, prev) : null;
       dayTotal += val;
       if (di < dates.length - 1) prevDayTotal += (dates[di + 1]?.stores[si]?.summary?.net_sales || 0);
 
-      const bg = heatColor(change);
-      html += `<td style="background:${bg}" title="${pctFmt(change)}">${fmtK(val)}</td>`;
+      const bg = partial ? 'transparent' : heatColor(change);
+      html += `<td style="background:${bg}" title="${partial ? 'IN PROGRESS' : pctFmt(change)}">${fmtK(val)}</td>`;
     });
 
-    const totalChange = di < dates.length - 1 ? pctChange(dayTotal, prevDayTotal) : null;
-    const totalBg = heatColor(totalChange);
+    const totalChange = (!partial && di < dates.length - 1) ? pctChange(dayTotal, prevDayTotal) : null;
+    const totalBg = partial ? 'transparent' : heatColor(totalChange);
     html += `<td style="background:${totalBg};font-weight:700">${fmtK(dayTotal)}</td>`;
-    html += `<td style="font-weight:600;color:${totalChange != null && totalChange >= 0 ? 'var(--green)' : 'var(--red)'}">${pctFmt(totalChange)}</td>`;
+    if (partial) {
+      html += '<td style="font-family:var(--mono);font-size:10px;color:var(--muted);">IN PROGRESS</td>';
+    } else {
+      html += `<td style="font-weight:600;color:${totalChange != null && totalChange >= 0 ? 'var(--green)' : 'var(--red)'}">${pctFmt(totalChange)}</td>`;
+    }
     html += '</tr>';
   });
 
-  html += '</tbody></table></div>';
+  html += '</tbody></table>';
+  if (isToday(dates[0]?.date)) {
+    html += '<div style="font-family:var(--mono);font-size:9px;color:var(--muted);margin-top:6px;">* Today is in progress — no comparisons shown</div>';
+  }
+  html += '</div>';
 
   // ── PER-STORE COMPARISON CARDS ──
   html += '<div class="section-title"><span>◆</span> STORE-BY-STORE — ' + data.dayName.toUpperCase() + ' TREND</div>';
@@ -896,24 +910,32 @@ function renderDayVsDay(data) {
   stores.forEach((s, si) => {
     const vals = dates.map(d => d.stores[si]?.summary?.net_sales || 0);
     const txns = dates.map(d => d.stores[si]?.summary?.transaction_count || 0);
-    const avgSales = vals.length > 0 ? vals.reduce((a, b) => a + b, 0) / vals.length : 0;
+    const latestIsToday = isToday(dates[0]?.date);
+    // For avg, exclude today if partial
+    const completedVals = latestIsToday ? vals.slice(1) : vals;
+    const avgSales = completedVals.length > 0 ? completedVals.reduce((a, b) => a + b, 0) / completedVals.length : 0;
     const latest = vals[0] || 0;
     const prev = vals[1] || 0;
-    const change = pctChange(latest, prev);
+    const change = latestIsToday ? null : pctChange(latest, prev);
     const maxVal = Math.max(...vals, 1);
+
+    const changeBadge = change != null
+      ? '<span class="vstatus ' + pctClass(change) + '" style="font-family:var(--mono);font-size:12px;font-weight:600">' + pctFmt(change) + '</span>'
+      : (latestIsToday ? '<span class="vstatus" style="font-family:var(--mono);font-size:10px;color:var(--muted)">IN PROGRESS</span>' : '');
 
     html += `<div class="vel-card">
       <div class="vname">
         <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${s.color}"></span>
         ${s.name}
-        <span class="vstatus ${pctClass(change)}" style="font-family:var(--mono);font-size:12px;font-weight:600">${pctFmt(change)}</span>
+        ${changeBadge}
       </div>
-      <div class="vrow"><span class="vl">MOST RECENT (${fmtDate(dates[0]?.date)})</span><span style="font-weight:700">${fmtK(latest)}</span></div>
-      <div class="vrow"><span class="vl">PREVIOUS (${dates[1] ? fmtDate(dates[1].date) : '—'})</span><span>${fmtK(prev)}</span></div>
-      <div class="vrow"><span class="vl">4-${data.dayName.toUpperCase()} AVG</span><span>${fmtK(avgSales)}</span></div>
-      <div class="sparkline">${vals.reverse().map(v => {
+      <div class="vrow"><span class="vl">${latestIsToday ? 'TODAY (IN PROGRESS)' : 'MOST RECENT (' + fmtDate(dates[0]?.date) + ')'}</span><span style="font-weight:700">${fmtK(latest)}</span></div>
+      <div class="vrow"><span class="vl">${dates[1] ? 'PREVIOUS (' + fmtDate(dates[1].date) + ')' : '—'}</span><span>${fmtK(prev)}</span></div>
+      <div class="vrow"><span class="vl">${completedVals.length}-${data.dayName.toUpperCase()} AVG (COMPLETED)</span><span>${fmtK(avgSales)}</span></div>
+      <div class="sparkline">${vals.slice().reverse().map((v, vi) => {
         const h = Math.max((v / maxVal * 36), 2);
-        return `<div class="bar" style="height:${h}px;background:${s.color};opacity:0.7;flex:1"></div>`;
+        const isPartial = latestIsToday && vi === vals.length - 1;
+        return '<div class="bar" style="height:' + h + 'px;background:' + s.color + ';opacity:' + (isPartial ? '0.35' : '0.7') + ';flex:1"></div>';
       }).join('')}</div>
       <div style="display:flex;justify-content:space-between;font-family:var(--mono);font-size:8px;color:var(--muted);margin-top:4px;">
         <span>${dates[dates.length-1] ? fmtDate(dates[dates.length-1].date) : ''}</span>
@@ -931,17 +953,19 @@ function renderDayVsDay(data) {
   html += '</tr></thead><tbody>';
 
   dates.forEach((day, di) => {
-    html += `<tr><td style="font-weight:700">${fmtDate(day.date)}</td>`;
+    const partial = isToday(day.date);
+    const dateLabel = fmtDate(day.date) + (partial ? ' *' : '');
+    html += `<tr${partial ? ' style="opacity:0.6"' : ''}><td style="font-weight:700">${dateLabel}</td>`;
     day.stores.forEach((st, si) => {
       const txn = st.summary?.transaction_count || 0;
       const basket = st.summary?.avg_basket || 0;
-      const prevTxn = di < dates.length - 1 ? (dates[di+1]?.stores[si]?.summary?.transaction_count || 0) : null;
-      const prevBasket = di < dates.length - 1 ? (dates[di+1]?.stores[si]?.summary?.avg_basket || 0) : null;
+      const prevTxn = (!partial && di < dates.length - 1) ? (dates[di+1]?.stores[si]?.summary?.transaction_count || 0) : null;
+      const prevBasket = (!partial && di < dates.length - 1) ? (dates[di+1]?.stores[si]?.summary?.avg_basket || 0) : null;
       const txnChange = prevTxn ? pctChange(txn, prevTxn) : null;
       const basketChange = prevBasket ? pctChange(basket, prevBasket) : null;
 
-      html += `<td style="background:${heatColor(txnChange)}">${txn}</td>`;
-      html += `<td style="background:${heatColor(basketChange)}">${fmt(basket)}</td>`;
+      html += `<td style="background:${partial ? 'transparent' : heatColor(txnChange)}">${txn}</td>`;
+      html += `<td style="background:${partial ? 'transparent' : heatColor(basketChange)}">${fmt(basket)}</td>`;
     });
     html += '</tr>';
   });
