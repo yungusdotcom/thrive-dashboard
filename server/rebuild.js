@@ -1,10 +1,6 @@
 // server/rebuild.js
-// ============================================================
-// Background Cache Rebuilder - Thrive Dashboard
-// PARALLEL: all sections run simultaneously
-// MERGED: store detail + budtenders share one fetch
-// ============================================================
-
+// Dashboard piggybacks hourly + budtenders (zero extra API calls)
+// Trend + DvD run in parallel alongside dashboard
 var fh = require('./flowhub');
 var redis = require('./redis');
 
@@ -17,9 +13,9 @@ var KEYS = {
   lock:        'rebuild:lock',
 };
 
-var LOCK_TTL = 180;   // 3 min lock
-var CACHE_TTL = 600;  // 10 min
-var CONCURRENCY = 3;  // up from 2
+var LOCK_TTL = 180;
+var CACHE_TTL = 600;
+var CONCURRENCY = 3;
 
 function pLimit(n) {
   var active = 0, q = [];
@@ -34,15 +30,44 @@ function pLimit(n) {
   };
 }
 
-// -- DASHBOARD ------------------------------------------------
+// -- DASHBOARD + STORE DETAIL + BUDTENDERS (all from one fetch) --
 async function rebuildDashboard() {
   var t0 = Date.now();
-  console.log('  [dashboard] starting...');
+  console.log('  [dashboard] starting (with hourly + budtenders)...');
   try {
     var data = await fh.getDashboardData();
     data.rebuildDurationMs = Date.now() - t0;
     await redis.setJSON(KEYS.dashboard, data, CACHE_TTL);
-    console.log('  [dashboard] done ' + (Date.now() - t0) + 'ms');
+
+    // Write storeDetail + budtender caches from dashboard data (zero extra fetches)
+    var lw = data.meta.dateRanges.lastWeek;
+    for (var i = 0; i < data.stores.length; i++) {
+      var store = data.stores[i];
+      if (!store.id) continue;
+
+      // Store detail cache (hourly heatmap + category trends)
+      if (store.hourly) {
+        var categoryTrend = (store.lwCategories || []).map(function(cat) {
+          return { name: cat.name, lw_sales: cat.net_sales, lw_units: cat.units, pw_sales: 0, pw_units: 0, wow_pct: null };
+        });
+        await redis.setJSON(KEYS.storeDetail(store.id), {
+          store: { id: store.id, name: store.name, color: store.color },
+          hourly: store.hourly, hourlyWeeks: 2, categoryTrend: categoryTrend,
+          lastWeek: lw, generatedAt: new Date().toISOString(),
+        }, CACHE_TTL);
+      }
+
+      // Budtender cache
+      if (store.budtenders) {
+        await redis.setJSON(KEYS.budtenders(store.id), {
+          store: { id: store.id, name: store.name, color: store.color },
+          employees: store.budtenders, categories: store.lwCategories || [],
+          week: lw, generatedAt: new Date().toISOString(),
+        }, CACHE_TTL);
+      }
+    }
+
+    console.log('  [dashboard] done ' + (Date.now() - t0) + 'ms (+ storeDetail + budtenders)');
     return data;
   } catch (err) {
     console.error('  [dashboard] FAIL: ' + err.message);
@@ -50,7 +75,7 @@ async function rebuildDashboard() {
   }
 }
 
-// -- TREND ----------------------------------------------------
+// -- TREND --------------------------------------------------------
 async function rebuildTrend(locations, limit) {
   var t0 = Date.now();
   console.log('  [trend] starting...');
@@ -95,74 +120,7 @@ async function rebuildTrend(locations, limit) {
   return payload;
 }
 
-// -- STORE DATA (merged: hourly + categories + budtenders) ----
-// ONE 4-week fetch per store produces BOTH storeDetail AND budtender caches
-async function rebuildStoreData(locations, limit) {
-  var t0 = Date.now();
-  console.log('  [storeData] starting (hourly + categories + budtenders)...');
-  var lw = fh.weekRange(1);
-  var pw = fh.weekRange(2);
-  var hourlyStart = fh.weekRange(4).start;
-  var hourlyEnd = lw.end;
-  var TZ = 'America/Los_Angeles';
-
-  await Promise.all(
-    locations.map(function(loc) {
-      return limit(async function() {
-        var ts = Date.now();
-        try {
-          var result = await fh.getOrdersForLocation(loc.importId, hourlyStart, hourlyEnd);
-          var allOrders = result.orders;
-          var hourly = fh.summarizeHourly(allOrders);
-
-          var lwOrders = allOrders.filter(function(o) {
-            var d = new Date(o.createdAt || o.completedOn || '').toLocaleDateString('en-CA', { timeZone: TZ });
-            return d >= lw.start && d <= lw.end;
-          });
-          var pwOrders = allOrders.filter(function(o) {
-            var d = new Date(o.createdAt || o.completedOn || '').toLocaleDateString('en-CA', { timeZone: TZ });
-            return d >= pw.start && d <= pw.end;
-          });
-
-          var lwSummary = fh.summarizeOrders(lwOrders);
-          var pwSummary = fh.summarizeOrders(pwOrders);
-
-          var pwCatMap = {};
-          (pwSummary.categories || []).forEach(function(c) { pwCatMap[c.name] = c; });
-          var categoryTrend = (lwSummary.categories || []).map(function(cat) {
-            var prev = pwCatMap[cat.name];
-            return {
-              name: cat.name, lw_sales: cat.net_sales, lw_units: cat.units,
-              pw_sales: prev ? prev.net_sales : 0, pw_units: prev ? prev.units : 0,
-              wow_pct: (prev && prev.net_sales > 0) ? Math.round(((cat.net_sales - prev.net_sales) / prev.net_sales) * 1000) / 10 : null,
-            };
-          });
-
-          // Write BOTH caches from ONE fetch
-          await redis.setJSON(KEYS.storeDetail(loc.id), {
-            store: { id: loc.id, name: loc.name, color: loc.color },
-            hourly: hourly, hourlyWeeks: 4, categoryTrend: categoryTrend,
-            lastWeek: lw, priorWeek: pw, generatedAt: new Date().toISOString(),
-          }, CACHE_TTL);
-
-          await redis.setJSON(KEYS.budtenders(loc.id), {
-            store: { id: loc.id, name: loc.name, color: loc.color },
-            employees: lwSummary.budtenders, categories: lwSummary.categories,
-            week: lw, generatedAt: new Date().toISOString(),
-          }, CACHE_TTL);
-
-          console.log('    store ' + loc.name + ': ' + allOrders.length + ' orders, ' + lwSummary.budtenders.length + ' bts (' + (Date.now() - ts) + 'ms)');
-        } catch (err) {
-          console.error('    store ' + loc.name + ': FAIL ' + err.message);
-        }
-      });
-    })
-  );
-
-  console.log('  [storeData] done ' + (Date.now() - t0) + 'ms');
-}
-
-// -- DAY VS DAY -- 7 DOWs with concurrency -------------------
+// -- DAY VS DAY ---------------------------------------------------
 async function rebuildDayVsDay(locations, limit) {
   var t0 = Date.now();
   console.log('  [dvd] starting all 7 DOWs...');
@@ -186,7 +144,7 @@ async function rebuildDayVsDay(locations, limit) {
   console.log('  [dvd] done ' + (Date.now() - t0) + 'ms');
 }
 
-// -- FULL REBUILD -- ALL SECTIONS IN PARALLEL -----------------
+// -- FULL REBUILD (parallel) --------------------------------------
 async function rebuildAll() {
   var t0 = Date.now();
   console.log('\n=== FULL REBUILD: starting (parallel) ===');
@@ -201,17 +159,13 @@ async function rebuildAll() {
     var locations = await fh.getLocations();
     var limit = pLimit(CONCURRENCY);
 
-    // ALL sections fire at once
-    // Dashboard runs its own Flowhub calls independently
-    // Trend, storeData, dvd share the limiter to cap parallel API calls
     var results = await Promise.allSettled([
       rebuildDashboard(),
       rebuildTrend(locations, limit),
-      rebuildStoreData(locations, limit),
       rebuildDayVsDay(locations, limit),
     ]);
 
-    var names = ['dashboard', 'trend', 'storeData', 'dvd'];
+    var names = ['dashboard+stores', 'trend', 'dvd'];
     results.forEach(function(r, i) {
       if (r.status === 'rejected') {
         console.error('  ' + names[i] + ' FAILED: ' + (r.reason ? r.reason.message : r.reason));
@@ -230,22 +184,20 @@ async function rebuildAll() {
   }
 }
 
-// -- Selective rebuild ----------------------------------------
 async function rebuildSection(section) {
   var locations = await fh.getLocations();
   var limit = pLimit(CONCURRENCY);
   switch (section) {
     case 'trend':       return rebuildTrend(locations, limit);
     case 'dvd':         return rebuildDayVsDay(locations, limit);
-    case 'storeData':   return rebuildStoreData(locations, limit);
-    case 'budtenders':  return rebuildStoreData(locations, limit);
-    case 'storeDetail': return rebuildStoreData(locations, limit);
     case 'dashboard':   return rebuildDashboard();
+    case 'budtenders':  return rebuildDashboard();
+    case 'storeDetail': return rebuildDashboard();
+    case 'storeData':   return rebuildDashboard();
     default:            return { error: 'unknown section' };
   }
 }
 
-// -- Read cached data -----------------------------------------
 async function getCachedTrend()           { return redis.getJSON(KEYS.trend); }
 async function getCachedDvd(dow)          { return redis.getJSON(KEYS.dvd(dow)); }
 async function getCachedBudtenders(id)    { return redis.getJSON(KEYS.budtenders(id)); }

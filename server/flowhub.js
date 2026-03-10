@@ -301,14 +301,15 @@ async function getWeeklyTrend(importId, weeksBack = 12) {
   saveWeekCache(); return trend;
 }
 
-// ── Dashboard ─────────────────────────────────────────────────
+// ── Dashboard (with hourly + budtenders piggybacked) ─────────
 async function getDashboardData() {
-  const tw = weekRange(0), lw = weekRange(1), td = todayRange(), locs = await getLocations();
+  const tw = weekRange(0), lw = weekRange(1), pw = weekRange(2), td = todayRange(), locs = await getLocations();
   console.log('Dashboard: fetching 7 stores...');
   const sd = [];
   for (const loc of locs) {
     try {
       const lwCK = weekCacheKey(loc.importId, lw.start);
+      let lwOrders = null;
       let lws = (isWeekCompleted(lw) && _weekCache[lwCK]) ? _weekCache[lwCK].summary : null;
       const { orders } = await getOrdersForLocation(loc.importId, tw.start, tw.end);
       const tws = summarizeOrders(orders);
@@ -318,12 +319,27 @@ async function getDashboardData() {
         const pacificDate = new Date(utc).toLocaleDateString('en-CA', { timeZone: TZ });
         return pacificDate === td.start;
       }));
-      if (!lws) { console.log(`  ${loc.name}: +last week`); const r = await getOrdersForLocation(loc.importId, lw.start, lw.end); lws = summarizeOrders(r.orders); if (isWeekCompleted(lw) && lws.net_sales > 0) { _weekCache[lwCK] = { week: lw, summary: lws, error: null }; saveWeekCache(); } }
-      sd.push({ ...loc, thisWeek: tws, lastWeek: lws, today: tds });
-      console.log(`  ✓ ${loc.name}: $${tds.net_sales} today`);
-    } catch (e) { console.error(`  ✗ ${loc.name}: ${e.message}`); sd.push({ ...loc, thisWeek: null, lastWeek: null, today: null }); }
+      if (!lws) {
+        console.log(`  ${loc.name}: +last week`);
+        const r = await getOrdersForLocation(loc.importId, lw.start, lw.end);
+        lwOrders = r.orders;
+        lws = summarizeOrders(lwOrders);
+        if (isWeekCompleted(lw) && lws.net_sales > 0) { _weekCache[lwCK] = { week: lw, summary: lws, error: null }; saveWeekCache(); }
+      }
+
+      // Hourly: use TW + LW orders (already fetched, no extra API calls)
+      const hourlyOrders = lwOrders ? orders.concat(lwOrders) : orders;
+      const hourly = summarizeHourly(hourlyOrders);
+
+      // Budtenders + categories from LW (or TW if LW was cached summary-only)
+      const btSource = lwOrders ? lwOrders : orders;
+      const btSummary = lwOrders ? lws : tws;
+
+      sd.push({ ...loc, thisWeek: tws, lastWeek: lws, today: tds, hourly: hourly, budtenders: btSummary.budtenders, lwCategories: btSummary.categories });
+      console.log(`  ✓ ${loc.name}: $${tds.net_sales} today, ${hourlyOrders.length} orders for hourly`);
+    } catch (e) { console.error(`  ✗ ${loc.name}: ${e.message}`); sd.push({ ...loc, thisWeek: null, lastWeek: null, today: null, hourly: null, budtenders: [], lwCategories: [] }); }
   }
-  return { meta: { fetchedAt: new Date().toISOString(), dateRanges: { thisWeek: tw, lastWeek: lw, today: td, ytd: ytdRange() } }, stores: sd };
+  return { meta: { fetchedAt: new Date().toISOString(), dateRanges: { thisWeek: tw, lastWeek: lw, priorWeek: pw, today: td, ytd: ytdRange() } }, stores: sd };
 }
 
 // ── Other endpoints ───────────────────────────────────────────
