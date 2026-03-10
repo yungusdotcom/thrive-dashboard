@@ -47,12 +47,9 @@ async function rebuildDashboard() {
 
       // Store detail cache (hourly heatmap + category trends)
       if (store.hourly) {
-        var categoryTrend = (store.lwCategories || []).map(function(cat) {
-          return { name: cat.name, lw_sales: cat.net_sales, lw_units: cat.units, pw_sales: 0, pw_units: 0, wow_pct: null };
-        });
         await redis.setJSON(KEYS.storeDetail(store.id), {
           store: { id: store.id, name: store.name, color: store.color },
-          hourly: store.hourly, hourlyWeeks: 2, categoryTrend: categoryTrend,
+          hourly: store.hourly, hourlyWeeks: 2, categoryTrend: store.categoryTrend || [],
           lastWeek: lw, generatedAt: new Date().toISOString(),
         }, CACHE_TTL);
       }
@@ -120,28 +117,24 @@ async function rebuildTrend(locations, limit) {
   return payload;
 }
 
-// -- DAY VS DAY ---------------------------------------------------
-async function rebuildDayVsDay(locations, limit) {
+// -- DAY VS DAY (bulk: 7 API calls for all 7 DOWs) ---------------
+async function rebuildDayVsDay() {
   var t0 = Date.now();
-  console.log('  [dvd] starting all 7 DOWs...');
-  var dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  console.log('  [dvd] starting (bulk fetch)...');
 
-  await Promise.all(
-    [0,1,2,3,4,5,6].map(function(dow) {
-      return limit(async function() {
-        var ts = Date.now();
-        try {
-          var data = await fh.getSingleDayVsDay(dow, 4);
-          await redis.setJSON(KEYS.dvd(dow), data, CACHE_TTL);
-          console.log('    dvd ' + dayNames[dow] + ': ' + (Date.now() - ts) + 'ms');
-        } catch (err) {
-          console.error('    dvd ' + dow + ': FAIL ' + err.message);
-        }
-      });
-    })
-  );
+  try {
+    var allDows = await fh.buildAllDayVsDay(4);
 
-  console.log('  [dvd] done ' + (Date.now() - t0) + 'ms');
+    for (var dow = 0; dow < 7; dow++) {
+      if (allDows[dow]) {
+        await redis.setJSON(KEYS.dvd(dow), allDows[dow], CACHE_TTL);
+      }
+    }
+
+    console.log('  [dvd] done ' + (Date.now() - t0) + 'ms (all 7 DOWs from bulk fetch)');
+  } catch (err) {
+    console.error('  [dvd] FAIL: ' + err.message);
+  }
 }
 
 // -- FULL REBUILD (parallel) --------------------------------------
@@ -162,7 +155,7 @@ async function rebuildAll() {
     var results = await Promise.allSettled([
       rebuildDashboard(),
       rebuildTrend(locations, limit),
-      rebuildDayVsDay(locations, limit),
+      rebuildDayVsDay(),
     ]);
 
     var names = ['dashboard+stores', 'trend', 'dvd'];
@@ -189,7 +182,7 @@ async function rebuildSection(section) {
   var limit = pLimit(CONCURRENCY);
   switch (section) {
     case 'trend':       return rebuildTrend(locations, limit);
-    case 'dvd':         return rebuildDayVsDay(locations, limit);
+    case 'dvd':         return rebuildDayVsDay();
     case 'dashboard':   return rebuildDashboard();
     case 'budtenders':  return rebuildDashboard();
     case 'storeDetail': return rebuildDashboard();

@@ -309,8 +309,9 @@ async function getDashboardData() {
   for (const loc of locs) {
     try {
       const lwCK = weekCacheKey(loc.importId, lw.start);
-      let lwOrders = null;
       let lws = (isWeekCompleted(lw) && _weekCache[lwCK]) ? _weekCache[lwCK].summary : null;
+
+      // Fetch this week orders (for today + TW KPIs)
       const { orders } = await getOrdersForLocation(loc.importId, tw.start, tw.end);
       const tws = summarizeOrders(orders);
       const tds = summarizeOrders(orders.filter(o => {
@@ -319,25 +320,50 @@ async function getDashboardData() {
         const pacificDate = new Date(utc).toLocaleDateString('en-CA', { timeZone: TZ });
         return pacificDate === td.start;
       }));
+
+      // Always fetch LW + PW raw orders for hourly heatmap (completed weeks only)
+      console.log(`  ${loc.name}: fetching LW+PW for hourly...`);
+      const lwPwResult = await getOrdersForLocation(loc.importId, pw.start, lw.end);
+      const lwPwOrders = lwPwResult.orders;
+
+      // Split into LW and PW
+      const lwOrders = lwPwOrders.filter(o => {
+        const d = new Date(o.createdAt || o.completedOn || '').toLocaleDateString('en-CA', { timeZone: TZ });
+        return d >= lw.start && d <= lw.end;
+      });
+      const pwOrders = lwPwOrders.filter(o => {
+        const d = new Date(o.createdAt || o.completedOn || '').toLocaleDateString('en-CA', { timeZone: TZ });
+        return d >= pw.start && d <= pw.end;
+      });
+
+      // LW summary (from raw orders, also caches it)
       if (!lws) {
-        console.log(`  ${loc.name}: +last week`);
-        const r = await getOrdersForLocation(loc.importId, lw.start, lw.end);
-        lwOrders = r.orders;
         lws = summarizeOrders(lwOrders);
         if (isWeekCompleted(lw) && lws.net_sales > 0) { _weekCache[lwCK] = { week: lw, summary: lws, error: null }; saveWeekCache(); }
       }
 
-      // Hourly: use TW + LW orders (already fetched, no extra API calls)
-      const hourlyOrders = lwOrders ? orders.concat(lwOrders) : orders;
-      const hourly = summarizeHourly(hourlyOrders);
+      // Hourly: ONLY completed weeks (LW + PW), never current week
+      const hourly = summarizeHourly(lwPwOrders);
 
-      // Budtenders + categories from LW (or TW if LW was cached summary-only)
-      const btSource = lwOrders ? lwOrders : orders;
-      const btSummary = lwOrders ? lws : tws;
+      // Budtenders + categories from LW raw orders
+      const lwSummary = summarizeOrders(lwOrders);
+      const pwSummary = summarizeOrders(pwOrders);
 
-      sd.push({ ...loc, thisWeek: tws, lastWeek: lws, today: tds, hourly: hourly, budtenders: btSummary.budtenders, lwCategories: btSummary.categories });
-      console.log(`  ✓ ${loc.name}: $${tds.net_sales} today, ${hourlyOrders.length} orders for hourly`);
-    } catch (e) { console.error(`  ✗ ${loc.name}: ${e.message}`); sd.push({ ...loc, thisWeek: null, lastWeek: null, today: null, hourly: null, budtenders: [], lwCategories: [] }); }
+      // Category trends (LW vs PW)
+      const pwCatMap = {};
+      (pwSummary.categories || []).forEach(c => { pwCatMap[c.name] = c; });
+      const categoryTrend = (lwSummary.categories || []).map(cat => {
+        const prev = pwCatMap[cat.name];
+        return {
+          name: cat.name, lw_sales: cat.net_sales, lw_units: cat.units,
+          pw_sales: prev ? prev.net_sales : 0, pw_units: prev ? prev.units : 0,
+          wow_pct: (prev && prev.net_sales > 0) ? Math.round(((cat.net_sales - prev.net_sales) / prev.net_sales) * 1000) / 10 : null,
+        };
+      });
+
+      sd.push({ ...loc, thisWeek: tws, lastWeek: lws, today: tds, hourly: hourly, budtenders: lwSummary.budtenders, lwCategories: lwSummary.categories, categoryTrend: categoryTrend });
+      console.log(`  ✓ ${loc.name}: $${tds.net_sales} today, ${lwPwOrders.length} orders for hourly (LW+PW)`);
+    } catch (e) { console.error(`  ✗ ${loc.name}: ${e.message}`); sd.push({ ...loc, thisWeek: null, lastWeek: null, today: null, hourly: null, budtenders: [], lwCategories: [], categoryTrend: [] }); }
   }
   return { meta: { fetchedAt: new Date().toISOString(), dateRanges: { thisWeek: tw, lastWeek: lw, priorWeek: pw, today: td, ytd: ytdRange() } }, stores: sd };
 }
@@ -364,4 +390,74 @@ async function getSingleDayVsDay(dow, weeksBack = 4) {
   return { dow, dayName: dn[dow], dates: dd };
 }
 
-module.exports = { getLocations, getOrdersForLocation, summarizeOrders, summarizeHourly, extractTopProducts, getAllStoresSales, getWeeklyTrend, getAllStoresWeeklyTrend, getTrendForStore, getDashboardData, getRawOrderSample, getSingleDayVsDay, weekRange, todayRange, ytdRange, toDateStr, STORE_CONFIG };
+// ── Bulk DvD: one 28-day fetch per store, builds all 7 DOWs ──
+async function buildAllDayVsDay(weeksBack = 4) {
+  const locs = await getLocations();
+  const today = todayPacific();
+  const dn = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+
+  // Date range: 28 days back from today
+  const startDate = addDays(today, -(weeksBack * 7));
+  const endDate = today;
+
+  console.log('  DvD bulk: fetching ' + startDate + ' to ' + endDate + ' for ' + locs.length + ' stores...');
+
+  // One fetch per store for the full 28-day window
+  const storeOrders = {};
+  for (const loc of locs) {
+    const t0 = Date.now();
+    try {
+      const { orders } = await getOrdersForLocation(loc.importId, startDate, endDate);
+      storeOrders[loc.id] = { loc: loc, orders: orders };
+      console.log('    DvD ' + loc.name + ': ' + orders.length + ' orders (' + (Date.now() - t0) + 'ms)');
+    } catch (e) {
+      console.error('    DvD ' + loc.name + ': FAIL ' + e.message);
+      storeOrders[loc.id] = { loc: loc, orders: [] };
+    }
+  }
+
+  // Bucket orders by Pacific date
+  const ordersByDate = {};
+  for (const id in storeOrders) {
+    const entry = storeOrders[id];
+    entry.orders.forEach(function(o) {
+      if (o.voided === true || o.orderStatus === 'voided') return;
+      const ts = o.createdAt || o.completedOn || '';
+      if (!ts) return;
+      const pacificDate = new Date(ts).toLocaleDateString('en-CA', { timeZone: TZ });
+      if (!ordersByDate[pacificDate]) ordersByDate[pacificDate] = {};
+      if (!ordersByDate[pacificDate][id]) ordersByDate[pacificDate][id] = [];
+      ordersByDate[pacificDate][id].push(o);
+    });
+  }
+
+  // Build all 7 DOWs
+  var results = {};
+  for (var dow = 0; dow < 7; dow++) {
+    var tdow = new Date(today + 'T12:00:00').getDay();
+    var dates = [];
+    for (var w = 0; w < weeksBack; w++) {
+      var db = (tdow - dow + 7) % 7;
+      if (db === 0 && w > 0) db = 7 * w;
+      else if (w > 0) db += 7 * w;
+      var d = addDays(today, -db);
+      if (d <= today) dates.push(d);
+    }
+
+    var dd = [];
+    dates.forEach(function(date) {
+      var sr = [];
+      locs.forEach(function(loc) {
+        var dayOrders = (ordersByDate[date] && ordersByDate[date][loc.id]) ? ordersByDate[date][loc.id] : [];
+        sr.push({ store: loc, summary: summarizeOrders(dayOrders) });
+      });
+      dd.push({ date: date, stores: sr });
+    });
+
+    results[dow] = { dow: dow, dayName: dn[dow], dates: dd };
+  }
+
+  return results;
+}
+
+module.exports = { getLocations, getOrdersForLocation, summarizeOrders, summarizeHourly, extractTopProducts, getAllStoresSales, getWeeklyTrend, getAllStoresWeeklyTrend, getTrendForStore, getDashboardData, getRawOrderSample, getSingleDayVsDay, buildAllDayVsDay, weekRange, todayRange, ytdRange, toDateStr, STORE_CONFIG };
