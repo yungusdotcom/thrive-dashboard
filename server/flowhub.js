@@ -304,68 +304,66 @@ async function getWeeklyTrend(importId, weeksBack = 12) {
 // ── Dashboard (with hourly + budtenders piggybacked) ─────────
 async function getDashboardData() {
   const tw = weekRange(0), lw = weekRange(1), pw = weekRange(2), td = todayRange(), locs = await getLocations();
-  console.log('Dashboard: fetching 7 stores...');
-  const sd = [];
-  for (const loc of locs) {
-    try {
-      const lwCK = weekCacheKey(loc.importId, lw.start);
-      let lws = (isWeekCompleted(lw) && _weekCache[lwCK]) ? _weekCache[lwCK].summary : null;
+  console.log('Dashboard: fetching 7 stores (single fetch each, parallel)...');
 
-      // Fetch this week orders (for today + TW KPIs)
-      const { orders } = await getOrdersForLocation(loc.importId, tw.start, tw.end);
-      const tws = summarizeOrders(orders);
-      const tds = summarizeOrders(orders.filter(o => {
-        const utc = o.createdAt || o.completedOn || '';
-        if (!utc) return false;
-        const pacificDate = new Date(utc).toLocaleDateString('en-CA', { timeZone: TZ });
-        return pacificDate === td.start;
-      }));
+  // Parallel: 3 stores at a time
+  const results = [];
+  const PARA = 3;
+  for (let i = 0; i < locs.length; i += PARA) {
+    const batch = locs.slice(i, i + PARA);
+    const batchResults = await Promise.all(batch.map(async (loc) => {
+      const t0 = Date.now();
+      try {
+        // ONE fetch: PW start through today — covers everything
+        const { orders: allOrders } = await getOrdersForLocation(loc.importId, pw.start, tw.end);
 
-      // Always fetch LW + PW raw orders for hourly heatmap (completed weeks only)
-      console.log(`  ${loc.name}: fetching LW+PW for hourly...`);
-      const lwPwResult = await getOrdersForLocation(loc.importId, pw.start, lw.end);
-      const lwPwOrders = lwPwResult.orders;
+        // Split by Pacific date
+        const twOrders = [], lwOrders = [], pwOrders = [], todayOrders = [];
+        allOrders.forEach(o => {
+          const utc = o.createdAt || o.completedOn || '';
+          if (!utc) return;
+          const d = new Date(utc).toLocaleDateString('en-CA', { timeZone: TZ });
+          if (d >= tw.start && d <= tw.end) { twOrders.push(o); if (d === td.start) todayOrders.push(o); }
+          if (d >= lw.start && d <= lw.end) lwOrders.push(o);
+          if (d >= pw.start && d <= pw.end) pwOrders.push(o);
+        });
 
-      // Split into LW and PW
-      const lwOrders = lwPwOrders.filter(o => {
-        const d = new Date(o.createdAt || o.completedOn || '').toLocaleDateString('en-CA', { timeZone: TZ });
-        return d >= lw.start && d <= lw.end;
-      });
-      const pwOrders = lwPwOrders.filter(o => {
-        const d = new Date(o.createdAt || o.completedOn || '').toLocaleDateString('en-CA', { timeZone: TZ });
-        return d >= pw.start && d <= pw.end;
-      });
+        const tws = summarizeOrders(twOrders);
+        const tds = summarizeOrders(todayOrders);
+        const lwSummary = summarizeOrders(lwOrders);
+        const pwSummary = summarizeOrders(pwOrders);
 
-      // LW summary (from raw orders, also caches it)
-      if (!lws) {
-        lws = summarizeOrders(lwOrders);
-        if (isWeekCompleted(lw) && lws.net_sales > 0) { _weekCache[lwCK] = { week: lw, summary: lws, error: null }; saveWeekCache(); }
+        // Cache LW summary
+        const lwCK = weekCacheKey(loc.importId, lw.start);
+        if (isWeekCompleted(lw) && lwSummary.net_sales > 0) { _weekCache[lwCK] = { week: lw, summary: lwSummary, error: null }; saveWeekCache(); }
+
+        // Hourly: ONLY completed weeks (LW + PW)
+        const completedOrders = lwOrders.concat(pwOrders);
+        const hourly = summarizeHourly(completedOrders);
+
+        // Category trends (LW vs PW)
+        const pwCatMap = {};
+        (pwSummary.categories || []).forEach(c => { pwCatMap[c.name] = c; });
+        const categoryTrend = (lwSummary.categories || []).map(cat => {
+          const prev = pwCatMap[cat.name];
+          return {
+            name: cat.name, lw_sales: cat.net_sales, lw_units: cat.units,
+            pw_sales: prev ? prev.net_sales : 0, pw_units: prev ? prev.units : 0,
+            wow_pct: (prev && prev.net_sales > 0) ? Math.round(((cat.net_sales - prev.net_sales) / prev.net_sales) * 1000) / 10 : null,
+          };
+        });
+
+        console.log('  \u2713 ' + loc.name + ': $' + tds.net_sales + ' today, ' + allOrders.length + ' total orders (' + (Date.now() - t0) + 'ms)');
+        return { ...loc, thisWeek: tws, lastWeek: lwSummary, today: tds, hourly: hourly, budtenders: lwSummary.budtenders, lwCategories: lwSummary.categories, categoryTrend: categoryTrend };
+      } catch (e) {
+        console.error('  \u2717 ' + loc.name + ': ' + e.message + ' (' + (Date.now() - t0) + 'ms)');
+        return { ...loc, thisWeek: null, lastWeek: null, today: null, hourly: null, budtenders: [], lwCategories: [], categoryTrend: [] };
       }
-
-      // Hourly: ONLY completed weeks (LW + PW), never current week
-      const hourly = summarizeHourly(lwPwOrders);
-
-      // Budtenders + categories from LW raw orders
-      const lwSummary = summarizeOrders(lwOrders);
-      const pwSummary = summarizeOrders(pwOrders);
-
-      // Category trends (LW vs PW)
-      const pwCatMap = {};
-      (pwSummary.categories || []).forEach(c => { pwCatMap[c.name] = c; });
-      const categoryTrend = (lwSummary.categories || []).map(cat => {
-        const prev = pwCatMap[cat.name];
-        return {
-          name: cat.name, lw_sales: cat.net_sales, lw_units: cat.units,
-          pw_sales: prev ? prev.net_sales : 0, pw_units: prev ? prev.units : 0,
-          wow_pct: (prev && prev.net_sales > 0) ? Math.round(((cat.net_sales - prev.net_sales) / prev.net_sales) * 1000) / 10 : null,
-        };
-      });
-
-      sd.push({ ...loc, thisWeek: tws, lastWeek: lws, today: tds, hourly: hourly, budtenders: lwSummary.budtenders, lwCategories: lwSummary.categories, categoryTrend: categoryTrend });
-      console.log(`  ✓ ${loc.name}: $${tds.net_sales} today, ${lwPwOrders.length} orders for hourly (LW+PW)`);
-    } catch (e) { console.error(`  ✗ ${loc.name}: ${e.message}`); sd.push({ ...loc, thisWeek: null, lastWeek: null, today: null, hourly: null, budtenders: [], lwCategories: [], categoryTrend: [] }); }
+    }));
+    results.push(...batchResults);
   }
-  return { meta: { fetchedAt: new Date().toISOString(), dateRanges: { thisWeek: tw, lastWeek: lw, priorWeek: pw, today: td, ytd: ytdRange() } }, stores: sd };
+
+  return { meta: { fetchedAt: new Date().toISOString(), dateRanges: { thisWeek: tw, lastWeek: lw, priorWeek: pw, today: td, ytd: ytdRange() } }, stores: results };
 }
 
 // ── Other endpoints ───────────────────────────────────────────
