@@ -1,0 +1,53 @@
+END OF DAY SALES DATA - Thrive Main Street - RD264
+CASH SALES,$162.00
+DEBIT SALES,$80.00
+GIFT CARD SALES,$0.00
+AEROPAY SALES,$0.00
+CREDIT SALES,$0.00
+OTHER SALES,$0.00
+LOYALTY SALES,$0.00
+TOTAL SALES,$242.00
+TOTAL FEES,$2.00
+REFUNDS,$0.00
+PAYOUTS,$0.00
+PAYINS,$0.00
+GIFT CARDS SOLD,$0.00
+GIFT CARD SOLD COUNT,0
+DROPS,$0.00
+TOTAL TRANSACTION COUNT,6
+TOTAL TAX,$36.02
+CANNABIS TAX,$34.76
+NON-CANNABIS TAX,$1.26
+TOTAL REVENUE,$205.98
+CANNABIS REVENUE,$188.98
+NON-CANNABIS REVENUE,$15.00
+" "
+" --- DRAWERS SALES DATA ---"
+" "
+AM DRAWER #1,LOYALTY,GIFT CARD,DEBIT,CASH,AEROPAY,CREDIT,OTHER
+Starting Balance,$ -.--,$ -.--,$ -.--,$400.00,$ -.--,$ -.--,$ -.--
+Sales,$0.00,$0.00,$55.00,$31.00,$0.00,$0.00,$0.00
+Drops,$ -.--,$ -.--,$ -.--,$0.00,$ -.--,$ -.--,$ -.--
+Payouts,$ -.--,$ -.--,$ -.--,$0.00,$ -.--,$ -.--,$ -.--
+Payins,$ -.--,$ -.--,$ -.--,$0.00,$ -.--,$ -.--,$ -.--
+Closing Balance,$ -.--,$ -.--,$ -.--,$0.00,$ -.--,$ -.--,$ -.--
+"	Employee Sales",,,,TOTAL
+"		Katherine Mercado Hernandez",,,,$86.00
+Drawer is still open
+" "
+" --- "
+" "
+AM DRAWER #3,LOYALTY,GIFT CARD,DEBIT,CASH,AEROPAY,CREDIT,OTHER
+Starting Balance,$ -.--,$ -.--,$ -.--,$400.00,$ -.--,$ -.--,$ -.--
+Sales,$0.00,$0.00,$25.00,$131.00,$0.00,$0.00,$0.00
+Drops,$ -.--,$ -.--,$ -.--,$0.00,$ -.--,$ -.--,$ -.--
+Payouts,$ -.--,$ -.--,$ -.--,$0.00,$ -.--,$ -.--,$ -.--
+Payins,$ -.--,$ -.--,$ -.--,$0.00,$ -.--,$ -.--,$ -.--
+Closing Balance,$ -.--,$ -.--,$ -.--,$0.00,$ -.--,$ -.--,$ -.--
+"	Employee Sales",,,,TOTAL
+"		Lindsey  Bean",,,,$43.00
+"		Clayton Vaughn",,,,$113.00
+Drawer is still open
+" "
+" --- "
+" "

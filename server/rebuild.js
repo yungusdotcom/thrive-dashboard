@@ -30,22 +30,34 @@ function pLimit(n) {
   };
 }
 
-// -- DASHBOARD + STORE DETAIL + BUDTENDERS (all from one fetch) --
+// -- DASHBOARD (fast: TW only, ~10s) ------------------------------
 async function rebuildDashboard() {
   var t0 = Date.now();
-  console.log('  [dashboard] starting (with hourly + budtenders)...');
+  console.log('  [dashboard] starting (TW only, fast)...');
   try {
     var data = await fh.getDashboardData();
     data.rebuildDurationMs = Date.now() - t0;
     await redis.setJSON(KEYS.dashboard, data, CACHE_TTL);
+    console.log('  [dashboard] done ' + (Date.now() - t0) + 'ms');
+    return data;
+  } catch (err) {
+    console.error('  [dashboard] FAIL: ' + err.message);
+    return null;
+  }
+}
 
-    // Write storeDetail + budtender caches from dashboard data (zero extra fetches)
-    var lw = data.meta.dateRanges.lastWeek;
+// -- STORE ENRICHMENT (LW+PW: hourly, budtenders, categories, ~60-90s) --
+async function rebuildStoreEnrichment() {
+  var t0 = Date.now();
+  console.log('  [enrich] starting (LW+PW for hourly + budtenders + categories)...');
+  try {
+    var data = await fh.getStoreEnrichmentData();
+    var lw = data.lastWeek;
+
     for (var i = 0; i < data.stores.length; i++) {
       var store = data.stores[i];
       if (!store.id) continue;
 
-      // Store detail cache (hourly heatmap + category trends)
       if (store.hourly) {
         await redis.setJSON(KEYS.storeDetail(store.id), {
           store: { id: store.id, name: store.name, color: store.color },
@@ -54,7 +66,6 @@ async function rebuildDashboard() {
         }, CACHE_TTL);
       }
 
-      // Budtender cache
       if (store.budtenders) {
         await redis.setJSON(KEYS.budtenders(store.id), {
           store: { id: store.id, name: store.name, color: store.color },
@@ -64,10 +75,10 @@ async function rebuildDashboard() {
       }
     }
 
-    console.log('  [dashboard] done ' + (Date.now() - t0) + 'ms (+ storeDetail + budtenders)');
+    console.log('  [enrich] done ' + (Date.now() - t0) + 'ms');
     return data;
   } catch (err) {
-    console.error('  [dashboard] FAIL: ' + err.message);
+    console.error('  [enrich] FAIL: ' + err.message);
     return null;
   }
 }
@@ -152,13 +163,17 @@ async function rebuildAll() {
     var locations = await fh.getLocations();
     var limit = pLimit(CONCURRENCY);
 
+    // Dashboard first (fast, TW only ~10s) — user sees data immediately
+    await rebuildDashboard();
+
+    // Then enrichment + trend + dvd all in parallel (background)
     var results = await Promise.allSettled([
-      rebuildDashboard(),
+      rebuildStoreEnrichment(),
       rebuildTrend(locations, limit),
       rebuildDayVsDay(),
     ]);
 
-    var names = ['dashboard+stores', 'trend', 'dvd'];
+    var names = ['enrichment', 'trend', 'dvd'];
     results.forEach(function(r, i) {
       if (r.status === 'rejected') {
         console.error('  ' + names[i] + ' FAILED: ' + (r.reason ? r.reason.message : r.reason));
@@ -184,9 +199,9 @@ async function rebuildSection(section) {
     case 'trend':       return rebuildTrend(locations, limit);
     case 'dvd':         return rebuildDayVsDay();
     case 'dashboard':   return rebuildDashboard();
-    case 'budtenders':  return rebuildDashboard();
-    case 'storeDetail': return rebuildDashboard();
-    case 'storeData':   return rebuildDashboard();
+    case 'budtenders':  return rebuildStoreEnrichment();
+    case 'storeDetail': return rebuildStoreEnrichment();
+    case 'storeData':   return rebuildStoreEnrichment();
     default:            return { error: 'unknown section' };
   }
 }
